@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 
 const EMPTY = {
@@ -25,42 +25,68 @@ function Field({ label, children, full }) {
 }
 
 function QRScanner({ onResult, onClose }) {
-  useEffect(() => {
-    let scanner;
-    let active = true;
-    import('html5-qrcode').then(({ Html5Qrcode }) => {
-      scanner = new Html5Qrcode('qr-reader');
-      scanner
-        .start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: 250 },
-          (text) => {
-            if (!active) return;
-            active = false;
-            scanner.stop().then(() => onResult(text)).catch(() => onResult(text));
-          },
-          () => {}
-        )
-        .catch((e) => {
-          console.error('Camera error', e);
-          alert('Could not start the camera. Check camera permissions for this site.');
-        });
-    });
-    return () => {
-      active = false;
-      if (scanner) scanner.stop().catch(() => {});
-    };
+  const [err, setErr] = useState('');
+  const [manual, setManual] = useState('');
+  const scannerRef = useRef(null);
+  const doneRef = useRef(false);
+
+  const finish = useCallback((text) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    const s = scannerRef.current;
+    if (s) {
+      s.stop().catch(() => {}).finally(() => onResult(text));
+    } else {
+      onResult(text);
+    }
   }, [onResult]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const mod = await import('html5-qrcode');
+        if (cancelled) return;
+        const scanner = new mod.Html5Qrcode('qr-reader', { verbose: false });
+        scannerRef.current = scanner;
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 220, height: 220 } },
+          (text) => { if (!cancelled) finish(text); },
+          () => {}
+        );
+      } catch (e) {
+        if (!cancelled) setErr(e?.message || String(e) || 'Camera could not start.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      const s = scannerRef.current;
+      if (s) {
+        s.stop().catch(() => {});
+        try { s.clear(); } catch (_) {}
+      }
+    };
+  }, [finish]);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Scan a QR label</h2>
         <div id="qr-reader" />
-        <p className="hint">Point the camera at a supply label&apos;s QR code.</p>
+        {err
+          ? <p className="error">Camera couldn&apos;t start on this device: {err}. Use the box below instead.</p>
+          : <p className="hint">Point the camera at a label&apos;s QR code — or type the ID below.</p>}
+        <Field label="Or enter the Item ID" full>
+          <input value={manual} placeholder="e.g. SUP-0007"
+            onChange={(e) => setManual(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && manual.trim()) finish(manual.trim()); }} />
+        </Field>
         <div className="modal-actions">
           <div className="spacer" />
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={!manual.trim()}
+            onClick={() => manual.trim() && finish(manual.trim())}>Go to item</button>
         </div>
       </div>
     </div>
@@ -144,6 +170,7 @@ export default function Home() {
   function handleScan(text) {
     setScanning(false);
     const code = (text || '').trim();
+    if (!code) return;
     const found = items.find((i) => (i.item_id || '').toLowerCase() === code.toLowerCase());
     if (found) openEdit(found);
     else alert('No item found for code: ' + code);
@@ -162,9 +189,14 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
-    const url = await uploadImage(file, editing.item_id);
-    setUploading(false);
-    if (url) setEditing((prev) => ({ ...prev, image_url: url }));
+    try {
+      const url = await uploadImage(file, editing.item_id);
+      if (url) setEditing((prev) => ({ ...prev, image_url: url }));
+    } catch (err) {
+      alert('Image upload failed: ' + (err?.message || err));
+    } finally {
+      setUploading(false);
+    }
   }
 
   const num = (v) => (v === '' || v == null ? null : Number(v));
