@@ -161,3 +161,46 @@ input, select, textarea { font: inherit; }
   .print-area .pq { width: 48px; text-align: center; }
   .print-area tr.pdone td { color: #888; text-decoration: line-through; }
 }
+
+/* ---- quick add-to-order button on item rows ---- */
+.row-add {
+  width: 36px; height: 36px; flex: 0 0 auto; border-radius: 9px; border: 1.5px solid var(--orange);
+  background: #fff; color: var(--orange); font-size: 20px; font-weight: 700; line-height: 1;
+  display: grid; place-items: center; padding: 0;
+}
+.row-add:hover { background: #fff3ec; }
+.row-add.on { border-color: #1f7a34; color: #fff; background: #1f7a34; }
+
+/* ---- quick add-to-order button ---- */
+.row-add {
+  width: 34px; height: 34px; flex: 0 0 auto; border-radius: 8px; border: 1px solid var(--orange);
+  background: #fff; color: var(--orange); font-size: 18px; font-weight: 700; line-height: 1;
+  display: grid; place-items: center;
+}
+.row-add:hover { background: #fff3ec; }
+.row-add.on { border-color: var(--ok-t); color: #fff; background: var(--ok-t); }
+
+/* ---- low / out-of-stock signals ---- */
+.badge.out { background: var(--reorder-t); color: #fff; }
+.item-row.low { box-shadow: inset 4px 0 0 var(--orange); }
+.item-row.out { box-shadow: inset 4px 0 0 var(--reorder-t); }
+.item-row.low:hover { box-shadow: inset 4px 0 0 var(--orange), 0 3px 12px rgba(0,0,0,.08); }
+.item-row.out:hover { box-shadow: inset 4px 0 0 var(--reorder-t), 0 3px 12px rgba(0,0,0,.08); }
+.lowpill {
+  display: inline-block; margin-left: 8px; background: var(--reorder); color: var(--reorder-t);
+  font-weight: 700; padding: 2px 10px; border-radius: 20px; cursor: pointer; font-size: 12px;
+}
+.lowpill.on { background: var(--reorder-t); color: #fff; }
+
+/* ---- inline quantity stepper ---- */
+.row-right { gap: 5px; }
+.qty-stepper { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+.qty-btn { width: 30px; height: 30px; border: none; background: #f3f3f3; color: var(--slate); font-size: 18px; font-weight: 700; line-height: 1; display: grid; place-items: center; }
+.qty-btn:hover { background: #e8e8e8; }
+.qty-input {
+  width: 46px; height: 30px; border: none; border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+  text-align: center; font-size: 14px; color: var(--ink-dk); -moz-appearance: textfield;
+}
+.qty-input::-webkit-outer-spin-button, .qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.row-meta-line { display: flex; align-items: center; gap: 8px; }
+.par-note { font-size: 11px; color: var(--muted); }
