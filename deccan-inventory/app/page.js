@@ -213,6 +213,7 @@ export default function Home() {
   const [setRows, setSetRows] = useState([]);
   const [activeSet, setActiveSet] = useState(null);
   const [kitSearch, setKitSearch] = useState('');
+  const [showHelp, setShowHelp] = useState(false);
 
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*');
@@ -545,15 +546,18 @@ export default function Home() {
   return (
     <div className="app">
       <header className="appheader">
-        <img src="/deccan-logo.png" alt="Deccan Dental" className="logo" />
-        <span className="app-tag">Inventory</span>
-        <div className="spacer" />
-        <div className="top-actions">
-          {view === 'items' && <button className="btn-scan" onClick={() => setScanning('open')}>Scan QR</button>}
-          {view === 'order' && <button className="btn-scan" onClick={() => setScanning('order')}>Scan to add</button>}
-          <button className="btn-primary" onClick={openAdd}>+ Add item</button>
-          <button className="btn-ghost" onClick={logout}>Log out</button>
+        <div className="appheader-top">
+          <img src="/deccan-logo.png" alt="Deccan Dental" className="logo" />
+          <div className="spacer" />
+          <div className="top-actions">
+            {view === 'items' && <button className="btn-scan" onClick={() => setScanning('open')}>Scan QR</button>}
+            {view === 'order' && <button className="btn-scan" onClick={() => setScanning('order')}>Scan to add</button>}
+            <button className="btn-primary" onClick={openAdd}>+ Add item</button>
+            <button className="btn-ghost" onClick={() => setShowHelp(true)}>Help</button>
+            <button className="btn-ghost" onClick={logout}>Log out</button>
+          </div>
         </div>
+        <div className="app-title">Inventory</div>
       </header>
 
       <div className="tabs">
@@ -782,6 +786,48 @@ export default function Home() {
               {editing.id && <button className="btn-danger" onClick={() => deleteItem(editing)}>Delete</button>}
               <button className="btn-secondary" onClick={closeModal}>Cancel</button>
               <button className="btn-primary" onClick={saveItem} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHelp && (
+        <div className="modal-backdrop" onClick={() => setShowHelp(false)}>
+          <div className="modal help-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="help-head">
+              <h2>How to use · FAQs</h2>
+              <button className="btn-secondary" onClick={() => setShowHelp(false)}>Close</button>
+            </div>
+            <div className="help-body">
+              <h3>The basics</h3>
+              <p>The <b>Items</b> tab lists every supply. Search by name, SKU, or ID; narrow the list with the <b>Category / Manufacturer / Supplier</b> dropdowns; reorder it with <b>Sort</b>. Tap any item to see its photo and full details or to edit it.</p>
+              <p>A coloured left edge and a <b>LOW</b> / <b>OUT</b> badge mean the stock is at or below that item&apos;s par level. Tap the red <b>&ldquo;N low / out&rdquo;</b> count at the top to show only those items.</p>
+
+              <h3>Updating stock (the monthly count)</h3>
+              <p>On each row use the <b>−</b> and <b>+</b> buttons to adjust the on-hand number, or tap the number and type it. It saves instantly, and the LOW/OUT flag updates as you go.</p>
+
+              <h3>Building an order</h3>
+              <p>Tap the round <b>+</b> on any item row to drop it onto the <b>Order list</b> (it turns into a green <b>✓</b>). Or open the Order list tab and use <b>Scan to add</b> to scan labels in quickly.</p>
+              <p>On the Order list: tick each checkbox as you place the order, adjust the <b>Qty</b>, remove with <b>✕</b>, and <b>Print</b> for a paper order sheet. <b>Clear checked</b> removes the ones you&apos;ve already ordered.</p>
+
+              <h3>Scanning</h3>
+              <p><b>Scan QR</b> on the Items tab opens the scanned item. On the Order list or inside a Set, <b>Scan to add</b> drops scanned items straight in. The camera asks permission the first time — tap <b>Allow</b>. If it won&apos;t start, you can always type the Item ID in the box instead.</p>
+
+              <h3>Sets (kits)</h3>
+              <p>The <b>Sets</b> tab groups items into kits (e.g. &ldquo;Crown Bur Set&rdquo;). Open a set, then <b>search</b> or <b>Scan to add</b> to put items in, and <b>✕</b> to take them out. An item can live in several sets — its stock and details are shared, so a change anywhere updates it everywhere. A row shows <b>&ldquo;in N other sets&rdquo;</b> when it&apos;s shared.</p>
+
+              <h3>Adding &amp; editing items</h3>
+              <p><b>+ Add item</b> creates a new one. Category, Manufacturer, and Supplier are dropdowns — pick an existing value, or choose <b>➕ New…</b> to create one. <b>Add / change photo</b> uses the camera (photos are shrunk automatically, so they load fast and barely use storage).</p>
+              <p><b>Par level</b> is the reorder threshold that drives the LOW/OUT flags. <b>Archive</b> hides an item but keeps it (tick <b>Archived</b> to view, then <b>Unarchive</b>); <b>Delete</b> is permanent — use Archive unless it was a mistake.</p>
+
+              <h3>FAQs</h3>
+              <div className="faq"><b>An item isn&apos;t flagged LOW even though it&apos;s low.</b><p>It needs a <b>Par level</b>. Open the item and set one — that&apos;s the number the on-hand count is compared against.</p></div>
+              <div className="faq"><b>Archive vs Delete?</b><p>Archive hides the item but keeps its record; Delete removes it for good. Prefer Archive.</p></div>
+              <div className="faq"><b>Can one item be in two sets?</b><p>Yes. It&apos;s the same item, so its stock and details stay in sync across every set and the main list.</p></div>
+              <div className="faq"><b>How do I add a brand-new category or supplier?</b><p>In the item, open the dropdown and choose <b>➕ New…</b>, then type it.</p></div>
+              <div className="faq"><b>What do the QR labels do?</b><p>Each label is that item&apos;s ID. Scanning it opens the item — or adds it, on the Order list or in a Set.</p></div>
+              <div className="faq"><b>The camera won&apos;t scan.</b><p>Make sure you allowed camera access and you&apos;re on the app&apos;s https link. The type-the-ID box always works as a backup.</p></div>
+              <div className="faq"><b>Do photos use a lot of space?</b><p>No — every photo is compressed automatically on upload, so you can add one per item without worry.</p></div>
             </div>
           </div>
         </div>
