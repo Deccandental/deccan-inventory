@@ -29,17 +29,22 @@ button { font: inherit; cursor: pointer; border-radius: 9px; border: 1px solid t
 input, select, textarea { font: inherit; }
 
 /* ---- login ---- */
-.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 20px; position: relative; overflow: hidden; background: linear-gradient(160deg, #ffffff, #f2f3f5); }
+.login-bg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(1100px, 150vw); height: auto; opacity: .18; pointer-events: none; user-select: none; }
 .login-card {
+  position: relative; z-index: 1;
   width: 100%; max-width: 360px; background: #fff; border: 1px solid var(--line);
-  border-radius: 16px; padding: 28px; box-shadow: 0 10px 34px rgba(0,0,0,.07);
+  border-radius: 16px; padding: 30px 28px; box-shadow: 0 12px 44px rgba(0,0,0,.14);
   display: flex; flex-direction: column; gap: 12px;
 }
-.login-card h1 { color: var(--slate); font-size: 20px; margin: 0; }
+.login-logo { height: 30px; width: auto; align-self: flex-start; margin-bottom: 6px; }
+.login-card h1 { color: var(--slate); font-size: 22px; margin: 0; }
 .login-card p { margin: 0; color: var(--muted); font-size: 14px; }
 .login-card input { padding: 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 16px; }
-.login-card button { background: var(--orange); color: #fff; padding: 12px; font-weight: 600; border: none; }
+.login-card input:focus { outline: none; border-color: var(--orange); }
+.login-card button { background: var(--orange); color: #fff; padding: 12px; font-weight: 600; border: none; border-radius: 9px; font-size: 15px; }
 .login-card button:hover { background: var(--orange-dk); }
+.login-card button:disabled { opacity: .6; }
 .login-card .error { color: var(--reorder-t); font-size: 14px; }
 
 /* ---- shell + header ---- */
