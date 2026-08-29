@@ -111,7 +111,7 @@ async function compressImage(file, maxDim = 1200, quality = 0.82) {
 }
 
 // mode: 'open' -> stop + onResult(code); 'add' -> keep running, call onAdd(code) per scan
-function QRScanner({ mode, onResult, onAdd, onClose }) {
+function QRScanner({ mode, title, onResult, onAdd, onClose }) {
   const [err, setErr] = useState('');
   const [manual, setManual] = useState('');
   const [flash, setFlash] = useState('');
@@ -168,7 +168,7 @@ function QRScanner({ mode, onResult, onAdd, onClose }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>{mode === 'add' ? 'Scan to add to order list' : 'Scan a QR label'}</h2>
+        <h2>{title || (mode === 'add' ? 'Scan to add' : 'Scan a QR label')}</h2>
         <div id="qr-reader" />
         {flash && <p className="flash">{flash}</p>}
         {err
@@ -209,6 +209,10 @@ export default function Home() {
   const [scanning, setScanning] = useState(null); // null | 'open' | 'add'
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sets, setSets] = useState([]);
+  const [setRows, setSetRows] = useState([]);
+  const [activeSet, setActiveSet] = useState(null);
+  const [kitSearch, setKitSearch] = useState('');
 
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*');
@@ -222,9 +226,23 @@ export default function Home() {
     setOrderList(data || []);
   }, []);
 
+  const fetchSets = useCallback(async () => {
+    const { data } = await supabase.from('sets').select('*').order('name');
+    setSets(data || []);
+  }, []);
+
+  const fetchSetRows = useCallback(async () => {
+    const { data } = await supabase.from('set_items').select('*');
+    setSetRows(data || []);
+  }, []);
+
   useEffect(() => {
-    (async () => { setLoading(true); await Promise.all([fetchItems(), fetchOrderList()]); setLoading(false); })();
-  }, [fetchItems, fetchOrderList]);
+    (async () => {
+      setLoading(true);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows()]);
+      setLoading(false);
+    })();
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -435,6 +453,93 @@ export default function Home() {
   }
   async function logout() { await fetch('/api/logout', { method: 'POST' }); window.location.href = '/login'; }
 
+  const itemSetNames = useMemo(() => {
+    const nameById = Object.fromEntries(sets.map((s) => [s.id, s.name]));
+    const m = {};
+    setRows.forEach((si) => { (m[si.item_id] ||= []).push(nameById[si.set_id]); });
+    return m;
+  }, [sets, setRows]);
+  function countInSet(setId) { return setRows.filter((si) => si.set_id === setId).length; }
+
+  async function createSetPrompt() {
+    const name = prompt('Name this set (e.g. "Crown Bur Set")');
+    if (!name || !name.trim()) return;
+    const { data, error } = await supabase.from('sets').insert({ name: name.trim() }).select().single();
+    if (error) { alert(error.message); return; }
+    await fetchSets();
+    if (data) setActiveSet(data.id);
+  }
+  async function renameSetPrompt(s) {
+    const name = prompt('Rename set', s.name);
+    if (!name || !name.trim()) return;
+    await supabase.from('sets').update({ name: name.trim() }).eq('id', s.id);
+    fetchSets();
+  }
+  async function deleteSetConfirm(s) {
+    if (!confirm(`Delete the set "${s.name}"?\nThe items themselves are NOT deleted — only the grouping.`)) return;
+    await supabase.from('sets').delete().eq('id', s.id);
+    setActiveSet(null); fetchSets(); fetchSetRows();
+  }
+  async function addItemToSet(setId, item) {
+    const { error } = await supabase.from('set_items').insert({ set_id: setId, item_id: item.item_id });
+    if (error && error.code !== '23505') { alert(error.message); return; }
+    fetchSetRows();
+  }
+  async function removeItemFromSet(setId, itemId) {
+    setSetRows((l) => l.filter((si) => !(si.set_id === setId && si.item_id === itemId)));
+    await supabase.from('set_items').delete().eq('set_id', setId).eq('item_id', itemId);
+  }
+  async function setAddByCode(code) {
+    const item = itemByCode(code);
+    if (!item) return 'No item: ' + code;
+    if (setRows.some((si) => si.set_id === activeSet && si.item_id === item.item_id)) return 'Already in set: ' + item.item_id;
+    const { error } = await supabase.from('set_items').insert({ set_id: activeSet, item_id: item.item_id });
+    if (error && error.code !== '23505') return 'Error: ' + error.message;
+    await fetchSetRows();
+    return 'Added ' + item.item_id;
+  }
+
+  function itemRow(item, opts = {}) {
+    const st = stockState(item);
+    const otherSets = opts.setId ? (itemSetNames[item.item_id] || []).filter((nm) => nm !== opts.setName).length : 0;
+    return (
+      <div className={'item-row' + (st === 'out' ? ' out' : st === 'low' ? ' low' : '')} key={item.id} onClick={() => openEdit(item)}>
+        <div className="row-thumb">
+          {item.image_url ? <img src={item.image_url} alt={item.name} /> : <span className="ph">▢</span>}
+        </div>
+        <div className="row-main">
+          <div className="row-name">{item.name}</div>
+          <div className="row-sub">
+            <span className="idpill">{item.item_id}</span>
+            {item.category && <span className="chip" style={catStyle(item.category)}>{item.category}</span>}
+            {otherSets > 0 && <span className="chip setchip">in {otherSets} other set{otherSets === 1 ? '' : 's'}</span>}
+            {item.supplier && <span className="row-supplier">{item.supplier}</span>}
+          </div>
+        </div>
+        <div className="row-right">
+          <div className="qty-stepper" onClick={(e) => e.stopPropagation()}>
+            <button className="qty-btn" onClick={() => bumpQty(item, -1)} aria-label="decrease">−</button>
+            <input className="qty-input" type="number" min="0" value={item.current_qty ?? 0}
+              onChange={(e) => patchItemLocal(item.id, { current_qty: e.target.value })}
+              onBlur={(e) => saveQty(item, parseInt(e.target.value || '0', 10))} />
+            <button className="qty-btn" onClick={() => bumpQty(item, 1)} aria-label="increase">+</button>
+          </div>
+          <div className="row-meta-line">
+            {item.par_level != null && <span className="par-note">par {item.par_level}</span>}
+            <StatusBadge item={item} />
+          </div>
+        </div>
+        <button className={onList(item.item_id) ? 'row-add on' : 'row-add'}
+          title={onList(item.item_id) ? 'On order list — tap to remove' : 'Add to order list'}
+          onClick={(e) => { e.stopPropagation(); toggleOrderForItem(item); }}>{onList(item.item_id) ? '✓' : '+'}</button>
+        {opts.setId && (
+          <button className="row-remove" title="Remove from this set"
+            onClick={(e) => { e.stopPropagation(); removeItemFromSet(opts.setId, item.item_id); }}>✕</button>
+        )}
+      </div>
+    );
+  }
+
   const today = new Date().toLocaleDateString();
 
   return (
@@ -444,9 +549,8 @@ export default function Home() {
         <span className="app-tag">Inventory</span>
         <div className="spacer" />
         <div className="top-actions">
-          {view === 'items'
-            ? <button className="btn-scan" onClick={() => setScanning('open')}>Scan QR</button>
-            : <button className="btn-scan" onClick={() => setScanning('add')}>Scan to add</button>}
+          {view === 'items' && <button className="btn-scan" onClick={() => setScanning('open')}>Scan QR</button>}
+          {view === 'order' && <button className="btn-scan" onClick={() => setScanning('order')}>Scan to add</button>}
           <button className="btn-primary" onClick={openAdd}>+ Add item</button>
           <button className="btn-ghost" onClick={logout}>Log out</button>
         </div>
@@ -456,6 +560,9 @@ export default function Home() {
         <button className={view === 'items' ? 'tab on' : 'tab'} onClick={() => setView('items')}>Items</button>
         <button className={view === 'order' ? 'tab on' : 'tab'} onClick={() => setView('order')}>
           Order list{orderCount ? ` (${orderCount})` : ''}
+        </button>
+        <button className={view === 'sets' ? 'tab on' : 'tab'} onClick={() => { setView('sets'); setActiveSet(null); }}>
+          Sets{sets.length ? ` (${sets.length})` : ''}
         </button>
       </div>
 
@@ -509,39 +616,7 @@ export default function Home() {
           )}
 
           <div className="item-list">
-            {visible.map((item) => (
-              <div className={'item-row' + (stockState(item) === 'out' ? ' out' : stockState(item) === 'low' ? ' low' : '')} key={item.id} onClick={() => openEdit(item)}>
-                <div className="row-thumb">
-                  {item.image_url ? <img src={item.image_url} alt={item.name} /> : <span className="ph">▢</span>}
-                </div>
-                <div className="row-main">
-                  <div className="row-name">{item.name}</div>
-                  <div className="row-sub">
-                    <span className="idpill">{item.item_id}</span>
-                    {item.category && <span className="chip" style={catStyle(item.category)}>{item.category}</span>}
-                    {item.supplier && <span className="row-supplier">{item.supplier}</span>}
-                  </div>
-                </div>
-                <div className="row-right">
-                  <div className="qty-stepper" onClick={(e) => e.stopPropagation()}>
-                    <button className="qty-btn" onClick={() => bumpQty(item, -1)} aria-label="decrease">−</button>
-                    <input className="qty-input" type="number" min="0" value={item.current_qty ?? 0}
-                      onChange={(e) => patchItemLocal(item.id, { current_qty: e.target.value })}
-                      onBlur={(e) => saveQty(item, parseInt(e.target.value || '0', 10))} />
-                    <button className="qty-btn" onClick={() => bumpQty(item, 1)} aria-label="increase">+</button>
-                  </div>
-                  <div className="row-meta-line">
-                    {item.par_level != null && <span className="par-note">par {item.par_level}</span>}
-                    <StatusBadge item={item} />
-                  </div>
-                </div>
-                <button
-                  className={onList(item.item_id) ? 'row-add on' : 'row-add'}
-                  title={onList(item.item_id) ? 'On order list — tap to remove' : 'Add to order list'}
-                  onClick={(e) => { e.stopPropagation(); toggleOrderForItem(item); }}
-                >{onList(item.item_id) ? '✓' : '+'}</button>
-              </div>
-            ))}
+            {visible.map((item) => itemRow(item))}
           </div>
         </>
       )}
@@ -578,6 +653,85 @@ export default function Home() {
           )}
         </>
       )}
+
+      {view === 'sets' && !activeSet && (
+        <>
+          <div className="order-toolbar">
+            <div className="count">{sets.length} set{sets.length === 1 ? '' : 's'}</div>
+            <div className="spacer" />
+            <button className="btn-primary" onClick={createSetPrompt}>+ New set</button>
+          </div>
+          {sets.length === 0 ? (
+            <div className="empty">No sets yet. Create one (e.g. <b>Crown Bur Set</b>), then add items by search or scan.</div>
+          ) : (
+            <div className="set-list">
+              {sets.map((s) => (
+                <div className="set-row" key={s.id} onClick={() => setActiveSet(s.id)}>
+                  <div className="set-name">{s.name}</div>
+                  <div className="set-count">{countInSet(s.id)} item{countInSet(s.id) === 1 ? '' : 's'} ›</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {view === 'sets' && activeSet && (() => {
+        const s = sets.find((x) => x.id === activeSet);
+        if (!s) return null;
+        const memberIds = setRows.filter((si) => si.set_id === activeSet).map((si) => si.item_id);
+        const members = memberIds.map((id) => itemByCode(id)).filter(Boolean)
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        const query = kitSearch.trim().toLowerCase();
+        const results = query
+          ? items.filter((i) => !i.archived && (
+              (i.name || '').toLowerCase().includes(query) ||
+              (i.sku || '').toLowerCase().includes(query) ||
+              (i.item_id || '').toLowerCase().includes(query))).slice(0, 12)
+          : [];
+        return (
+          <>
+            <div className="order-toolbar">
+              <button className="btn-secondary" onClick={() => { setActiveSet(null); setKitSearch(''); }}>← Sets</button>
+              <div className="set-title">{s.name}</div>
+              <div className="spacer" />
+              <button className="btn-ghost" onClick={() => renameSetPrompt(s)}>Rename</button>
+              <button className="btn-danger" onClick={() => deleteSetConfirm(s)}>Delete set</button>
+            </div>
+
+            <div className="controls">
+              <input className="search" placeholder="Search items to add…" value={kitSearch}
+                onChange={(e) => setKitSearch(e.target.value)} />
+              <button className="btn-scan" onClick={() => setScanning('set')}>Scan to add</button>
+            </div>
+
+            {query && (
+              <div className="add-results">
+                {results.length === 0 ? <div className="add-none">No matches.</div> : results.map((it) => {
+                  const inSet = memberIds.includes(it.item_id);
+                  return (
+                    <div className="add-row" key={it.id}>
+                      <div className="add-info"><span className="idpill">{it.item_id}</span> {it.name}</div>
+                      <button className={inSet ? 'row-add on' : 'row-add'}
+                        onClick={() => inSet ? removeItemFromSet(activeSet, it.item_id) : addItemToSet(activeSet, it)}>
+                        {inSet ? '✓' : '+'}</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="count">{members.length} item{members.length === 1 ? '' : 's'} in this set</div>
+            {members.length === 0 ? (
+              <div className="empty">Empty set. Search above or tap <b>Scan to add</b> to put items in <b>{s.name}</b>.</div>
+            ) : (
+              <div className="item-list">
+                {members.map((item) => itemRow(item, { setId: activeSet, setName: s.name }))}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {editing && (
         <div className="modal-backdrop" onClick={closeModal}>
@@ -634,7 +788,14 @@ export default function Home() {
       )}
 
       {scanning && (
-        <QRScanner mode={scanning} onResult={handleScan} onAdd={orderAddByCode} onClose={() => setScanning(null)} />
+        <QRScanner
+          mode={scanning === 'open' ? 'open' : 'add'}
+          title={scanning === 'order' ? 'Scan to add to order list'
+            : scanning === 'set' ? 'Scan to add to this set'
+            : 'Scan a QR label'}
+          onResult={handleScan}
+          onAdd={scanning === 'set' ? setAddByCode : orderAddByCode}
+          onClose={() => setScanning(null)} />
       )}
 
       {/* Print-only order sheet */}
