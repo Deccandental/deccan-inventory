@@ -212,3 +212,9 @@ input, select, textarea { font: inherit; }
 .list-head .lh-stock { width: 106px; text-align: center; }
 .list-head .lh-addspace { width: 34px; margin-left: 12px; }
 @media (max-width: 520px) { .list-head { display: none; } }
+
+/* ---- pick-or-new dropdown (category / manufacturer / supplier) ---- */
+.field select { padding: 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 15px; color: var(--ink); background: #fff; }
+.pick-new { display: flex; gap: 6px; align-items: center; }
+.pick-new input { flex: 1; }
+.pick-back { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
