@@ -263,3 +263,12 @@ input, select, textarea { font: inherit; }
 .help-body .faq { margin: 12px 0; padding-left: 12px; border-left: 3px solid var(--line); }
 .help-body .faq > b { display: block; color: var(--ink-dk); font-size: 14px; margin-bottom: 2px; }
 .help-body .faq p { margin: 2px 0 0; color: #666; }
+
+/* ---- category grouping ---- */
+.cat-group { margin-bottom: 16px; }
+.cat-header {
+  display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px;
+  padding: 7px 12px; border-radius: 8px; margin-bottom: 6px;
+  background: #ececec; color: var(--slate);
+}
+.cat-count { font-weight: 600; font-size: 12px; opacity: .75; }
