@@ -92,7 +92,7 @@ input, select, textarea { font: inherit; }
   width: 48px; height: 48px; flex: 0 0 auto; border-radius: 8px; overflow: hidden;
   background: #eee; display: grid; place-items: center;
 }
-.row-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.row-thumb img { width: 100%; height: 100%; object-fit: contain; }
 .row-thumb .ph { font-size: 16px; color: #bbb; }
 .row-main { flex: 1; min-width: 0; }
 .row-name { font-weight: 600; font-size: 14px; color: var(--ink-dk); line-height: 1.25;
@@ -136,7 +136,7 @@ input, select, textarea { font: inherit; }
 .field input, .field textarea { padding: 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 15px; color: var(--ink); }
 .field textarea { min-height: 64px; resize: vertical; }
 .img-edit { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
-.img-edit img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); }
+.img-edit img { width: 96px; height: 96px; object-fit: contain; border-radius: 10px; border: 1px solid var(--line); }
 .img-edit .noimg.big { width: 96px; height: 96px; display: grid; place-items: center; background: #eee; border-radius: 10px; color: var(--muted); font-size: 13px; }
 .file-btn { display: inline-flex; align-items: center; }
 .modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
