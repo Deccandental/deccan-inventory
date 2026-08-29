@@ -43,14 +43,12 @@ input, select, textarea { font: inherit; }
 /* ---- shell + header ---- */
 .app { max-width: 1200px; margin: 0 auto; padding: 0 16px 24px; }
 .appheader {
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  padding: 14px 4px; margin-bottom: 4px; border-bottom: 3px solid var(--orange);
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 4px 10px; margin-bottom: 4px; border-bottom: 3px solid var(--orange);
 }
+.appheader-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .appheader .logo { height: 34px; width: auto; display: block; }
-.appheader .app-tag {
-  font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .12em;
-  text-transform: uppercase; padding-left: 12px; border-left: 1px solid var(--line);
-}
+.app-title { text-align: center; font-size: 23px; font-weight: 700; color: var(--slate); letter-spacing: .01em; }
 .appheader .spacer { flex: 1; }
 .top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -144,7 +142,7 @@ input, select, textarea { font: inherit; }
 
 @media (max-width: 520px) {
   .form { grid-template-columns: 1fr; }
-  .appheader .app-tag { display: none; }
+  .app-title { font-size: 20px; }
 }
 
 /* ---- print ---- */
@@ -236,3 +234,14 @@ input, select, textarea { font: inherit; }
 .add-row { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; }
 .add-info { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-none { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+
+/* ---- help / FAQ ---- */
+.help-modal { max-width: 620px; }
+.help-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: 0; background: #fff; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.help-head h2 { margin: 0; }
+.help-body { padding-top: 4px; }
+.help-body h3 { color: var(--orange-dk); font-size: 15px; margin: 20px 0 6px; }
+.help-body p { font-size: 14px; line-height: 1.55; color: var(--ink); margin: 6px 0; }
+.help-body .faq { margin: 12px 0; padding-left: 12px; border-left: 3px solid var(--line); }
+.help-body .faq > b { display: block; color: var(--ink-dk); font-size: 14px; margin-bottom: 2px; }
+.help-body .faq p { margin: 2px 0 0; color: #666; }
