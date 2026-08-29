@@ -23,15 +23,17 @@ export default function Login() {
 
   return (
     <div className="login-wrap">
+      <img src="/login-art.png" alt="" className="login-bg" aria-hidden="true" />
       <form className="login-card" onSubmit={submit}>
-        <h1>Deccan Dental Inventory</h1>
+        <img src="/deccan-logo.png" alt="Deccan Dental" className="login-logo" />
+        <h1>Inventory</h1>
         <p>Enter the practice password to continue.</p>
         <input type="password" value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password" autoFocus />
         {error && <div className="error">{error}</div>}
         <button type="submit" disabled={loading}>
-          {loading ? 'Checking…' : 'Enter'}
+          {loading ? 'Checking…' : 'Sign in'}
         </button>
       </form>
     </div>
