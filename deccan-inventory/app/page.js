@@ -48,6 +48,35 @@ function Field({ label, children, full }) {
   );
 }
 
+// Real dropdown of existing options + an explicit "New…" choice.
+// Reliable on every device (native select), and only creates a new
+// value when the user deliberately picks "New…".
+function PickOrNew({ value, options, onChange, noun }) {
+  const NEW = '__new__';
+  const [custom, setCustom] = useState(value !== '' && value != null && !options.includes(value));
+  if (custom) {
+    return (
+      <div className="pick-new">
+        <input autoFocus value={value || ''} placeholder={`New ${noun} name`}
+          onChange={(e) => onChange(e.target.value)} />
+        <button type="button" className="btn-secondary pick-back"
+          onClick={() => { onChange(''); setCustom(false); }}>List</button>
+      </div>
+    );
+  }
+  return (
+    <select value={options.includes(value) ? value : ''}
+      onChange={(e) => {
+        if (e.target.value === NEW) { onChange(''); setCustom(true); }
+        else onChange(e.target.value);
+      }}>
+      <option value="">— Select —</option>
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      <option value={NEW}>➕ New {noun}…</option>
+    </select>
+  );
+}
+
 async function safeStop(scanner) {
   if (!scanner) return;
   try {
@@ -540,10 +569,19 @@ export default function Home() {
 
               <Field label="Item ID *"><input value={editing.item_id} onChange={(e) => setEditing({ ...editing, item_id: e.target.value })} /></Field>
               <Field label="Name *"><input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
-              <Field label="Category"><input list="cats" value={editing.category || ''} onChange={(e) => setEditing({ ...editing, category: e.target.value })} /></Field>
+              <Field label="Category">
+                <PickOrNew key={(editing.id || 'new') + '-cat'} noun="category" value={editing.category || ''}
+                  options={categories} onChange={(v) => setEditing({ ...editing, category: v })} />
+              </Field>
               <Field label="SKU / Item #"><input value={editing.sku || ''} onChange={(e) => setEditing({ ...editing, sku: e.target.value })} /></Field>
-              <Field label="Manufacturer"><input list="mans" value={editing.manufacturer || ''} onChange={(e) => setEditing({ ...editing, manufacturer: e.target.value })} /></Field>
-              <Field label="Supplier"><input list="sups" value={editing.supplier || ''} onChange={(e) => setEditing({ ...editing, supplier: e.target.value })} /></Field>
+              <Field label="Manufacturer">
+                <PickOrNew key={(editing.id || 'new') + '-man'} noun="manufacturer" value={editing.manufacturer || ''}
+                  options={manufacturers} onChange={(v) => setEditing({ ...editing, manufacturer: v })} />
+              </Field>
+              <Field label="Supplier">
+                <PickOrNew key={(editing.id || 'new') + '-sup'} noun="supplier" value={editing.supplier || ''}
+                  options={suppliers} onChange={(v) => setEditing({ ...editing, supplier: v })} />
+              </Field>
               <Field label="Storage location"><input value={editing.storage_location || ''} onChange={(e) => setEditing({ ...editing, storage_location: e.target.value })} /></Field>
               <Field label="Current qty"><input type="number" value={editing.current_qty ?? ''} onChange={(e) => setEditing({ ...editing, current_qty: e.target.value })} /></Field>
               <Field label="Par level"><input type="number" value={editing.par_level ?? ''} onChange={(e) => setEditing({ ...editing, par_level: e.target.value })} /></Field>
@@ -569,10 +607,6 @@ export default function Home() {
           </div>
         </div>
       )}
-
-      <datalist id="cats">{categories.map((c) => <option key={c} value={c} />)}</datalist>
-      <datalist id="mans">{manufacturers.map((c) => <option key={c} value={c} />)}</datalist>
-      <datalist id="sups">{suppliers.map((c) => <option key={c} value={c} />)}</datalist>
 
       {scanning && (
         <QRScanner mode={scanning} onResult={handleScan} onAdd={orderAddByCode} onClose={() => setScanning(null)} />
