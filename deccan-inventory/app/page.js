@@ -548,37 +548,51 @@ export default function Home() {
       <header className="appheader">
         <div className="appheader-top">
           <img src="/deccan-logo.png" alt="Deccan Dental" className="logo" />
-          <div className="spacer" />
+          <div className="hsearch">
+            <select className="hsearch-cat" value={fCategory}
+              onChange={(e) => { setFCategory(e.target.value); if (view !== 'items') setView('items'); }}>
+              <option value="">All categories</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input className="hsearch-input" placeholder="Search items, SKU, or ID"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); if (e.target.value && view !== 'items') setView('items'); }} />
+            <button className="hsearch-btn" aria-label="Search" onClick={() => setView('items')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><line x1="16.5" y1="16.5" x2="21" y2="21" /></svg>
+            </button>
+          </div>
           <div className="top-actions">
-            {view === 'items' && <button className="btn-scan" onClick={() => setScanning('open')}>Scan QR</button>}
-            {view === 'order' && <button className="btn-scan" onClick={() => setScanning('order')}>Scan to add</button>}
-            <button className="btn-primary" onClick={openAdd}>+ Add item</button>
+            <button className="btn-scan" onClick={() => setScanning(view === 'order' ? 'order' : (view === 'sets' && activeSet) ? 'set' : 'open')}>Scan</button>
+            <button className="btn-primary" onClick={openAdd}>+ Add</button>
+            <button className="cart-btn" aria-label="Order list" onClick={() => { setView('order'); setActiveSet(null); }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M2 3h3l2.4 12h11l2-8H6" /></svg>
+              {orderCount > 0 && <span className="cart-count">{orderCount}</span>}
+            </button>
             <button className="btn-ghost" onClick={() => setShowHelp(true)}>Help</button>
             <button className="btn-ghost" onClick={logout}>Log out</button>
           </div>
         </div>
-        <div className="app-title">Inventory</div>
       </header>
 
-      <div className="tabs">
-        <button className={view === 'items' ? 'tab on' : 'tab'} onClick={() => setView('items')}>Items</button>
-        <button className={view === 'order' ? 'tab on' : 'tab'} onClick={() => setView('order')}>
+      <div className="navbar">
+        <button className={view === 'items' ? 'navtab on' : 'navtab'} onClick={() => setView('items')}>Items</button>
+        <button className={view === 'order' ? 'navtab on' : 'navtab'} onClick={() => { setView('order'); setActiveSet(null); }}>
           Order list{orderCount ? ` (${orderCount})` : ''}
         </button>
-        <button className={view === 'sets' ? 'tab on' : 'tab'} onClick={() => { setView('sets'); setActiveSet(null); }}>
+        <button className={view === 'sets' ? 'navtab on' : 'navtab'} onClick={() => { setView('sets'); setActiveSet(null); }}>
           Sets{sets.length ? ` (${sets.length})` : ''}
         </button>
+        <div className="navbar-spacer" />
+        {lowCount > 0 && (
+          <button className={fLow ? 'navlow on' : 'navlow'} onClick={() => { setView('items'); setFLow((v) => !v); }}>
+            ⚠ {lowCount} low / out
+          </button>
+        )}
       </div>
 
       {view === 'items' && (
         <>
-          <div className="controls">
-            <input className="search" placeholder="Search name, SKU, or ID…"
-              value={search} onChange={(e) => setSearch(e.target.value)} />
-            <select value={fCategory} onChange={(e) => setFCategory(e.target.value)}>
-              <option value="">All categories</option>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+          <div className="filterbar">
             <select value={fManufacturer} onChange={(e) => setFManufacturer(e.target.value)}>
               <option value="">All manufacturers</option>
               {manufacturers.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -603,11 +617,6 @@ export default function Home() {
 
           <div className="count">
             {loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}
-            {!loading && lowCount > 0 && (
-              <span className={fLow ? 'lowpill on' : 'lowpill'} onClick={() => setFLow((v) => !v)}>
-                {lowCount} low / out
-              </span>
-            )}
           </div>
 
           {visible.length > 0 && (
