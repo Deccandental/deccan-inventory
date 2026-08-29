@@ -22,10 +22,21 @@ function catStyle(name) {
   return { background: bg, color: fg };
 }
 
-function StatusBadge({ item }) {
+function stockState(item) {
   if (item.par_level == null || item.par_level === '') return null;
-  const low = Number(item.current_qty ?? 0) <= Number(item.par_level);
-  return <span className={low ? 'badge reorder' : 'badge ok'}>{low ? 'REORDER' : 'OK'}</span>;
+  const qty = Number(item.current_qty ?? 0);
+  const par = Number(item.par_level);
+  if (qty <= 0) return 'out';
+  if (qty <= par) return 'low';
+  return 'ok';
+}
+
+function StatusBadge({ item }) {
+  const s = stockState(item);
+  if (!s) return null;
+  if (s === 'out') return <span className="badge out">OUT</span>;
+  if (s === 'low') return <span className="badge reorder">LOW</span>;
+  return <span className="badge ok">OK</span>;
 }
 
 function Field({ label, children, full }) {
@@ -139,6 +150,7 @@ export default function Home() {
   const [fManufacturer, setFManufacturer] = useState('');
   const [fSupplier, setFSupplier] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [fLow, setFLow] = useState(false);
   const [sortBy, setSortBy] = useState('item_id');
   const [editing, setEditing] = useState(null);
   const [scanning, setScanning] = useState(null); // null | 'open' | 'add'
@@ -177,12 +189,17 @@ export default function Home() {
   const categories = useMemo(() => uniq('category'), [uniq]);
   const manufacturers = useMemo(() => uniq('manufacturer'), [uniq]);
   const suppliers = useMemo(() => uniq('supplier'), [uniq]);
+  const lowCount = useMemo(
+    () => items.filter((i) => !i.archived && ['low', 'out'].includes(stockState(i))).length,
+    [items]
+  );
 
   const visible = useMemo(() => {
     let list = items.filter((i) => (showArchived ? i.archived : !i.archived));
     if (fCategory) list = list.filter((i) => i.category === fCategory);
     if (fManufacturer) list = list.filter((i) => i.manufacturer === fManufacturer);
     if (fSupplier) list = list.filter((i) => i.supplier === fSupplier);
+    if (fLow) list = list.filter((i) => { const s = stockState(i); return s === 'low' || s === 'out'; });
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(
@@ -199,7 +216,7 @@ export default function Home() {
       return String(a[s] || '').localeCompare(String(b[s] || ''));
     });
     return list;
-  }, [items, showArchived, fCategory, fManufacturer, fSupplier, search, sortBy]);
+  }, [items, showArchived, fCategory, fManufacturer, fSupplier, fLow, search, sortBy]);
 
   // order list joined with item details, sorted: unchecked first, then by supplier + name
   const orderRows = useMemo(() => {
@@ -257,6 +274,12 @@ export default function Home() {
     if (msg.startsWith('Error')) alert(msg);
   }
 
+  async function toggleOrderForItem(item) {
+    const existing = orderList.find((o) => o.item_id === item.item_id);
+    if (existing) await removeFromOrder(existing.id);
+    else await addItemToOrder(item);
+  }
+
   async function removeFromOrder(entryId) {
     setOrderList((l) => l.filter((o) => o.id !== entryId));
     await supabase.from('order_list').delete().eq('id', entryId);
@@ -305,6 +328,19 @@ export default function Home() {
       if (url) setEditing((prev) => ({ ...prev, image_url: url }));
     } catch (err) { alert('Image upload failed: ' + (err?.message || err)); }
     finally { setUploading(false); }
+  }
+
+  function patchItemLocal(id, patch) {
+    setItems((list) => list.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  }
+  async function saveQty(item, qty) {
+    const q = Math.max(0, Number.isFinite(qty) ? qty : 0);
+    patchItemLocal(item.id, { current_qty: q });
+    const { error } = await supabase.from('items').update({ current_qty: q }).eq('id', item.id);
+    if (error) { alert('Could not update qty: ' + error.message); fetchItems(); }
+  }
+  function bumpQty(item, delta) {
+    saveQty(item, Number(item.current_qty ?? 0) + delta);
   }
 
   const num = (v) => (v === '' || v == null ? null : Number(v));
@@ -400,11 +436,18 @@ export default function Home() {
             </label>
           </div>
 
-          <div className="count">{loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}</div>
+          <div className="count">
+            {loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}
+            {!loading && lowCount > 0 && (
+              <span className={fLow ? 'lowpill on' : 'lowpill'} onClick={() => setFLow((v) => !v)}>
+                {lowCount} low / out
+              </span>
+            )}
+          </div>
 
           <div className="item-list">
             {visible.map((item) => (
-              <div className="item-row" key={item.id} onClick={() => openEdit(item)}>
+              <div className={'item-row' + (stockState(item) === 'out' ? ' out' : stockState(item) === 'low' ? ' low' : '')} key={item.id} onClick={() => openEdit(item)}>
                 <div className="row-thumb">
                   {item.image_url ? <img src={item.image_url} alt={item.name} /> : <span className="ph">▢</span>}
                 </div>
@@ -417,9 +460,23 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="row-right">
-                  <div className="row-qty">Qty {item.current_qty ?? 0}{item.par_level != null ? ` / ${item.par_level}` : ''}</div>
-                  <StatusBadge item={item} />
+                  <div className="qty-stepper" onClick={(e) => e.stopPropagation()}>
+                    <button className="qty-btn" onClick={() => bumpQty(item, -1)} aria-label="decrease">−</button>
+                    <input className="qty-input" type="number" min="0" value={item.current_qty ?? 0}
+                      onChange={(e) => patchItemLocal(item.id, { current_qty: e.target.value })}
+                      onBlur={(e) => saveQty(item, parseInt(e.target.value || '0', 10))} />
+                    <button className="qty-btn" onClick={() => bumpQty(item, 1)} aria-label="increase">+</button>
+                  </div>
+                  <div className="row-meta-line">
+                    {item.par_level != null && <span className="par-note">par {item.par_level}</span>}
+                    <StatusBadge item={item} />
+                  </div>
                 </div>
+                <button
+                  className={onList(item.item_id) ? 'row-add on' : 'row-add'}
+                  title={onList(item.item_id) ? 'On order list — tap to remove' : 'Add to order list'}
+                  onClick={(e) => { e.stopPropagation(); toggleOrderForItem(item); }}
+                >{onList(item.item_id) ? '✓' : '+'}</button>
               </div>
             ))}
           </div>
