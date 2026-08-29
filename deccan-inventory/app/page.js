@@ -24,6 +24,22 @@ function Field({ label, children, full }) {
   );
 }
 
+// Safely stop a running html5-qrcode scanner. Guards against the
+// "Cannot stop, scanner is not running or paused" error by checking state first.
+async function safeStop(scanner) {
+  if (!scanner) return;
+  try {
+    // 2 === Html5QrcodeScannerState.SCANNING, 3 === PAUSED
+    const state = typeof scanner.getState === 'function' ? scanner.getState() : null;
+    if (state === 2 || state === 3) {
+      await scanner.stop();
+    }
+  } catch (_) {
+    /* already stopped — ignore */
+  }
+  try { scanner.clear(); } catch (_) {}
+}
+
 function QRScanner({ onResult, onClose }) {
   const [err, setErr] = useState('');
   const [manual, setManual] = useState('');
@@ -34,11 +50,7 @@ function QRScanner({ onResult, onClose }) {
     if (doneRef.current) return;
     doneRef.current = true;
     const s = scannerRef.current;
-    if (s) {
-      s.stop().catch(() => {}).finally(() => onResult(text));
-    } else {
-      onResult(text);
-    }
+    safeStop(s).finally(() => onResult(text));
   }, [onResult]);
 
   useEffect(() => {
@@ -55,17 +67,15 @@ function QRScanner({ onResult, onClose }) {
           (text) => { if (!cancelled) finish(text); },
           () => {}
         );
+        // If the component was torn down while starting, stop now.
+        if (cancelled) safeStop(scanner);
       } catch (e) {
         if (!cancelled) setErr(e?.message || String(e) || 'Camera could not start.');
       }
     })();
     return () => {
       cancelled = true;
-      const s = scannerRef.current;
-      if (s) {
-        s.stop().catch(() => {});
-        try { s.clear(); } catch (_) {}
-      }
+      safeStop(scannerRef.current);
     };
   }, [finish]);
 
