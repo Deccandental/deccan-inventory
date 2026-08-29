@@ -111,3 +111,47 @@ input, select, textarea { font: inherit; }
   .form { grid-template-columns: 1fr; }
   .brand { width: 100%; }
 }
+
+/* ---- tabs ---- */
+.tabs { display: flex; gap: 6px; margin: 4px 0 12px; border-bottom: 1px solid var(--line); }
+.tab {
+  background: transparent; border: none; padding: 10px 16px; font-size: 15px; color: #567;
+  border-bottom: 3px solid transparent; border-radius: 0; margin-bottom: -1px; cursor: pointer;
+}
+.tab.on { color: var(--teal-dk); font-weight: 700; border-bottom-color: var(--teal); }
+
+/* ---- order list ---- */
+.order-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.order-toolbar .spacer { flex: 1; }
+.empty { color: #789; background: #fff; border: 1px dashed var(--line); border-radius: 12px; padding: 28px; text-align: center; }
+.order-rows { display: flex; flex-direction: column; gap: 6px; }
+.order-row {
+  display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; padding: 12px 14px;
+}
+.order-row.done { background: #f4f8f8; }
+.order-check { width: 22px; height: 22px; flex: 0 0 auto; accent-color: var(--teal); cursor: pointer; }
+.order-main { flex: 1; min-width: 0; cursor: pointer; }
+.order-name { font-weight: 600; font-size: 15px; }
+.order-sub { font-size: 12px; color: #678; margin-top: 2px; }
+.order-row.done .order-name { text-decoration: line-through; color: #9ab; }
+.order-row.done .order-sub { color: #9ab; }
+.order-qty { width: 64px; text-align: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 15px; }
+.order-x { background: transparent; border: none; color: #b99; font-size: 16px; padding: 6px 8px; cursor: pointer; }
+.order-x:hover { color: var(--reorder-t); }
+.flash { color: var(--ok-t); background: var(--ok); border-radius: 8px; padding: 8px 10px; font-weight: 600; font-size: 14px; }
+
+/* ---- print ---- */
+.print-area { display: none; }
+@media print {
+  .app > *:not(.print-area) { display: none !important; }
+  .print-area { display: block !important; color: #000; }
+  .print-area h1 { font-size: 20px; margin: 0 0 2px; }
+  .print-area .print-date { font-size: 12px; color: #444; margin-bottom: 14px; }
+  .print-area table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .print-area th, .print-area td { border-bottom: 1px solid #999; text-align: left; padding: 7px 6px; vertical-align: top; }
+  .print-area th { border-bottom: 2px solid #000; font-size: 12px; }
+  .print-area .pc { width: 24px; text-align: center; font-size: 15px; }
+  .print-area .pq { width: 48px; text-align: center; }
+  .print-area tr.pdone td { color: #888; text-decoration: line-through; }
+}
