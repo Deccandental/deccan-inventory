@@ -9,6 +9,19 @@ const EMPTY = {
   expiration_date: '', order_link: '', unit_price: '', last_ordered: '', notes: '', image_url: '',
 };
 
+const CAT_COLORS = [
+  ['#ffe8dd', '#b3441a'], ['#e4edff', '#2c4a8f'], ['#e6f6ea', '#1c6b2c'],
+  ['#f3e8ff', '#6b2fae'], ['#fff4d6', '#8a6100'], ['#e2f5f5', '#0a5252'],
+  ['#ffe4ee', '#9c1b4a'], ['#eceff1', '#455a64'], ['#e8f0d8', '#4a6b12'],
+  ['#fde6e6', '#9c1b1b'], ['#e0f0ff', '#12608a'], ['#efe7de', '#6b4a2f'],
+];
+function catStyle(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  const [bg, fg] = CAT_COLORS[h % CAT_COLORS.length];
+  return { background: bg, color: fg };
+}
+
 function StatusBadge({ item }) {
   if (item.par_level == null || item.par_level === '') return null;
   const low = Number(item.current_qty ?? 0) <= Number(item.par_level);
@@ -336,8 +349,10 @@ export default function Home() {
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">Deccan Dental — Inventory</div>
+      <header className="appheader">
+        <img src="/deccan-logo.png" alt="Deccan Dental" className="logo" />
+        <span className="app-tag">Inventory</span>
+        <div className="spacer" />
         <div className="top-actions">
           {view === 'items'
             ? <button className="btn-scan" onClick={() => setScanning('open')}>Scan QR</button>
@@ -387,21 +402,23 @@ export default function Home() {
 
           <div className="count">{loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}</div>
 
-          <div className="grid">
+          <div className="item-list">
             {visible.map((item) => (
-              <div className="card" key={item.id} onClick={() => openEdit(item)}>
-                <div className="thumb">
-                  {item.image_url ? <img src={item.image_url} alt={item.name} /> : <div className="noimg">No photo</div>}
+              <div className="item-row" key={item.id} onClick={() => openEdit(item)}>
+                <div className="row-thumb">
+                  {item.image_url ? <img src={item.image_url} alt={item.name} /> : <span className="ph">▢</span>}
                 </div>
-                <div className="card-body">
-                  <div className="card-top">
+                <div className="row-main">
+                  <div className="row-name">{item.name}</div>
+                  <div className="row-sub">
                     <span className="idpill">{item.item_id}</span>
-                    <StatusBadge item={item} />
+                    {item.category && <span className="chip" style={catStyle(item.category)}>{item.category}</span>}
+                    {item.supplier && <span className="row-supplier">{item.supplier}</span>}
                   </div>
-                  <div className="name">{item.name}</div>
-                  <div className="meta">{item.category}</div>
-                  <div className="meta">Qty: {item.current_qty ?? 0}{item.par_level != null ? ` / par ${item.par_level}` : ''}</div>
-                  <div className="meta">{item.supplier}</div>
+                </div>
+                <div className="row-right">
+                  <div className="row-qty">Qty {item.current_qty ?? 0}{item.par_level != null ? ` / ${item.par_level}` : ''}</div>
+                  <StatusBadge item={item} />
                 </div>
               </div>
             ))}
