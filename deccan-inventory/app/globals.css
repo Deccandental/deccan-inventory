@@ -218,3 +218,21 @@ input, select, textarea { font: inherit; }
 .pick-new { display: flex; gap: 6px; align-items: center; }
 .pick-new input { flex: 1; }
 .pick-back { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
+
+/* ---- sets / kits ---- */
+.set-list { display: flex; flex-direction: column; gap: 6px; }
+.set-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; cursor: pointer;
+}
+.set-row:hover { box-shadow: 0 3px 12px rgba(0,0,0,.06); border-color: #dcdcdc; }
+.set-name { font-weight: 600; font-size: 15px; color: var(--ink-dk); }
+.set-count { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.set-title { font-weight: 700; color: var(--slate); font-size: 16px; }
+.setchip { background: #efe7de; color: #6b4a2f; }
+.row-remove { background: transparent; border: none; color: #c9a; font-size: 15px; padding: 6px 8px; flex: 0 0 auto; }
+.row-remove:hover { color: var(--reorder-t); }
+.add-results { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.add-row { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; }
+.add-info { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-none { color: var(--muted); font-size: 13px; padding: 6px 2px; }
