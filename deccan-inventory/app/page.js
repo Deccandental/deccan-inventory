@@ -204,7 +204,7 @@ export default function Home() {
   const [fSupplier, setFSupplier] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [fLow, setFLow] = useState(false);
-  const [sortBy, setSortBy] = useState('item_id');
+  const [sortBy, setSortBy] = useState('category');
   const [editing, setEditing] = useState(null);
   const [scanning, setScanning] = useState(null); // null | 'open' | 'add'
   const [uploading, setUploading] = useState(false);
@@ -303,6 +303,17 @@ export default function Home() {
   }, [orderList, itemByCode]);
 
   const orderCount = orderList.length;
+
+  const grouped = useMemo(() => {
+    const g = {};
+    visible.forEach((it) => { const c = it.category || 'Uncategorized'; (g[c] ||= []).push(it); });
+    Object.values(g).forEach((arr) => arr.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+    return Object.entries(g).sort((a, b) => {
+      if (a[0] === 'Uncategorized') return 1;
+      if (b[0] === 'Uncategorized') return -1;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [visible]);
 
   function nextItemId() {
     let max = 0;
@@ -604,7 +615,7 @@ export default function Home() {
             <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
               <option value="item_id">Sort: Item ID</option>
               <option value="name">Sort: Name</option>
-              <option value="category">Sort: Category</option>
+              <option value="category">Group by category</option>
               <option value="manufacturer">Sort: Manufacturer</option>
               <option value="supplier">Sort: Supplier</option>
               <option value="current_qty">Sort: Quantity (low first)</option>
@@ -628,9 +639,20 @@ export default function Home() {
             </div>
           )}
 
-          <div className="item-list">
-            {visible.map((item) => itemRow(item))}
-          </div>
+          {sortBy === 'category' ? (
+            grouped.map(([cat, its]) => (
+              <div className="cat-group" key={cat}>
+                <div className="cat-header" style={cat === 'Uncategorized' ? undefined : catStyle(cat)}>
+                  {cat} <span className="cat-count">{its.length}</span>
+                </div>
+                <div className="item-list">{its.map((item) => itemRow(item))}</div>
+              </div>
+            ))
+          ) : (
+            <div className="item-list">
+              {visible.map((item) => itemRow(item))}
+            </div>
+          )}
         </>
       )}
 
