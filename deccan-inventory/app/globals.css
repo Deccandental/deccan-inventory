@@ -206,7 +206,7 @@ input, select, textarea { font: inherit; }
 .par-note { font-size: 11px; color: var(--muted); }
 
 /* ---- column header strip ---- */
-.list-head { display: flex; align-items: center; padding: 2px 12px 6px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.list-head { display: flex; align-items: center; padding: 2px 12px 8px; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--slate); }
 .list-head .lh-item { padding-left: 60px; }
 .list-head .lh-spacer { flex: 1; }
 .list-head .lh-stock { width: 106px; text-align: center; }
