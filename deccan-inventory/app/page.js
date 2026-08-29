@@ -445,6 +445,15 @@ export default function Home() {
             )}
           </div>
 
+          {visible.length > 0 && (
+            <div className="list-head">
+              <span className="lh-item">Item</span>
+              <span className="lh-spacer" />
+              <span className="lh-stock">In stock</span>
+              <span className="lh-addspace" />
+            </div>
+          )}
+
           <div className="item-list">
             {visible.map((item) => (
               <div className={'item-row' + (stockState(item) === 'out' ? ' out' : stockState(item) === 'low' ? ' low' : '')} key={item.id} onClick={() => openEdit(item)}>
