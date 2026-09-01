@@ -277,3 +277,6 @@ input, select, textarea { font: inherit; }
   background: #ececec; color: var(--slate);
 }
 .cat-count { font-weight: 600; font-size: 12px; opacity: .75; }
+
+/* ---- photo edit actions ---- */
+.img-edit-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
