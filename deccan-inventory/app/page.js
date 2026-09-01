@@ -775,10 +775,16 @@ export default function Home() {
             <div className="form">
               <div className="img-edit">
                 {editing.image_url ? <img src={editing.image_url} alt="" /> : <div className="noimg big">No photo</div>}
-                <label className="btn-secondary file-btn">
-                  {uploading ? 'Uploading…' : 'Add / change photo'}
-                  <input type="file" accept="image/*" capture="environment" onChange={onPickImage} hidden />
-                </label>
+                <div className="img-edit-actions">
+                  <label className="btn-secondary file-btn">
+                    {uploading ? 'Uploading…' : (editing.image_url ? 'Change photo' : 'Add photo')}
+                    <input type="file" accept="image/*" capture="environment" onChange={onPickImage} hidden />
+                  </label>
+                  {editing.image_url && (
+                    <button type="button" className="btn-ghost"
+                      onClick={() => setEditing({ ...editing, image_url: null })}>Remove photo</button>
+                  )}
+                </div>
               </div>
 
               <Field label="Item ID *"><input value={editing.item_id} onChange={(e) => setEditing({ ...editing, item_id: e.target.value })} /></Field>
