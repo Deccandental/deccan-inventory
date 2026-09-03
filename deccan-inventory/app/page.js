@@ -214,6 +214,7 @@ export default function Home() {
   const [activeSet, setActiveSet] = useState(null);
   const [kitSearch, setKitSearch] = useState('');
   const [showHelp, setShowHelp] = useState(false);
+  const [zoomImg, setZoomImg] = useState(null);
 
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*');
@@ -774,7 +775,7 @@ export default function Home() {
             <h2>{editing.id ? 'Edit item' : 'Add item'}</h2>
             <div className="form">
               <div className="img-edit">
-                {editing.image_url ? <img src={editing.image_url} alt="" /> : <div className="noimg big">No photo</div>}
+                {editing.image_url ? <img src={editing.image_url} alt="" className="zoomable" onClick={() => setZoomImg(editing.image_url)} /> : <div className="noimg big">No photo</div>}
                 <div className="img-edit-actions">
                   <label className="btn-secondary file-btn">
                     {uploading ? 'Uploading…' : (editing.image_url ? 'Change photo' : 'Add photo')}
@@ -867,6 +868,13 @@ export default function Home() {
               <div className="faq"><b>Do photos use a lot of space?</b><p>No — every photo is compressed automatically on upload, so you can add one per item without worry.</p></div>
             </div>
           </div>
+        </div>
+      )}
+
+      {zoomImg && (
+        <div className="lightbox" onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" />
+          <button className="lightbox-close" onClick={() => setZoomImg(null)} aria-label="Close">✕</button>
         </div>
       )}
 
