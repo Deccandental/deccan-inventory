@@ -45,6 +45,27 @@ function fmtDate(ts) {
   catch (_) { return ''; }
 }
 
+// Small modal to schedule the next inventory count
+function ScheduleModal({ initialDate, initialWho, onSave, onClear, onClose }) {
+  const [date, setDate] = useState(initialDate || '');
+  const [who, setWho] = useState(initialWho || '');
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal sched-modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Schedule next count</h2>
+        <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <Field label="Assigned to (optional)"><input value={who} onChange={(e) => setWho(e.target.value)} placeholder="Name" /></Field>
+        <div className="modal-actions">
+          {onClear && <button className="btn-ghost" onClick={onClear}>Clear</button>}
+          <div className="spacer" />
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={!date} onClick={() => onSave(date, who.trim())}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Number entry used in the guided count flow
 function CountInput({ initial, onSave }) {
   const [v, setV] = useState(String(initial ?? 0));
@@ -239,6 +260,11 @@ export default function Home() {
   const [zoomImg, setZoomImg] = useState(null);
   const [counting, setCounting] = useState(null);
   const [lastCount, setLastCount] = useState(null);
+  const [nextCount, setNextCount] = useState(null);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [savedOrders, setSavedOrders] = useState([]);
+  const [showSaved, setShowSaved] = useState(false);
+  const [printTarget, setPrintTarget] = useState(null);
 
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*');
@@ -268,13 +294,24 @@ export default function Home() {
     setLastCount(data && data[0] ? data[0] : null);
   }, []);
 
+  const fetchNextCount = useCallback(async () => {
+    const { data } = await supabase.from('inventory_sessions').select('*')
+      .eq('status', 'scheduled').order('scheduled_date', { ascending: true }).limit(1);
+    setNextCount(data && data[0] ? data[0] : null);
+  }, []);
+
+  const fetchSavedOrders = useCallback(async () => {
+    const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(50);
+    setSavedOrders(data || []);
+  }, []);
+
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount()]);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchNextCount(), fetchSavedOrders()]);
       setLoading(false);
     })();
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchNextCount, fetchSavedOrders]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -441,7 +478,33 @@ export default function Home() {
     await supabase.from('order_list').delete().in('id', done);
   }
 
-  function printList() { window.print(); }
+  function printList() { setPrintTarget({ type: 'live' }); setTimeout(() => window.print(), 60); }
+  function printSaved(order) { setPrintTarget({ type: 'saved', order }); setShowSaved(false); setTimeout(() => window.print(), 120); }
+
+  async function scheduleCount(date, who) {
+    await supabase.from('inventory_sessions').delete().eq('status', 'scheduled');
+    await supabase.from('inventory_sessions').insert({ status: 'scheduled', scheduled_date: date, assigned_to: who || null, label: 'Scheduled count' });
+    setShowSchedule(false);
+    fetchNextCount();
+  }
+  async function clearSchedule() {
+    await supabase.from('inventory_sessions').delete().eq('status', 'scheduled');
+    setShowSchedule(false);
+    fetchNextCount();
+  }
+
+  async function saveOrder() {
+    if (orderRows.length === 0) { alert('The order list is empty.'); return; }
+    const who = (prompt('Save this order sheet. Who placed the order? (optional)') || '').trim() || null;
+    const lines = orderRows.map((o) => ({
+      item_id: o.item_id, name: o.item?.name || o.item_id, sku: o.item?.sku || '',
+      supplier: o.item?.supplier || '', qty: o.qty,
+    }));
+    const { error } = await supabase.from('orders').insert({ placed_by: who, item_count: lines.length, lines });
+    if (error) { alert('Could not save order: ' + error.message); return; }
+    fetchSavedOrders();
+    alert('Order saved — find it any time under “Saved orders”.');
+  }
 
   // ---- item image + save ----
   async function uploadImage(file, itemId) {
@@ -716,12 +779,21 @@ export default function Home() {
           </div>
 
           <div className="countbanner">
-            <span className="countbanner-text">
-              {lastCount
+            <div className="countbanner-text">
+              <div>{lastCount
                 ? `Last count: ${fmtDate(lastCount.completed_at)}${lastCount.assigned_to ? ' · ' + lastCount.assigned_to : ''}`
-                : 'No inventory count logged yet'}
-            </span>
-            <button className="btn-scan" onClick={startCount} title="Steps through the items currently shown, one at a time">Start count</button>
+                : 'No inventory count logged yet'}</div>
+              {nextCount && (
+                <div className={nextCount.scheduled_date < new Date().toISOString().slice(0, 10) ? 'nextcount past' : 'nextcount'}>
+                  Next: {fmtDate(nextCount.scheduled_date)}{nextCount.assigned_to ? ' · ' + nextCount.assigned_to : ''}
+                  {nextCount.scheduled_date < new Date().toISOString().slice(0, 10) ? ' · past due' : ''}
+                </div>
+              )}
+            </div>
+            <div className="countbanner-actions">
+              <button className="btn-secondary" onClick={() => setShowSchedule(true)}>Schedule</button>
+              <button className="btn-scan" onClick={startCount} title="Steps through the items currently shown, one at a time">Start count</button>
+            </div>
           </div>
 
           {visible.length > 0 && (
@@ -755,7 +827,9 @@ export default function Home() {
           <div className="order-toolbar">
             <div className="count">{orderCount} on the list</div>
             <div className="spacer" />
+            <button className="btn-ghost" onClick={() => setShowSaved(true)}>Saved orders</button>
             <button className="btn-secondary" onClick={clearChecked}>Clear checked</button>
+            <button className="btn-secondary" onClick={saveOrder}>Save order</button>
             <button className="btn-primary" onClick={printList}>Print</button>
           </div>
 
@@ -1035,21 +1109,57 @@ export default function Home() {
       )}
 
       {/* Print-only order sheet */}
+      {showSchedule && (
+        <ScheduleModal
+          initialDate={nextCount?.scheduled_date || ''}
+          initialWho={nextCount?.assigned_to || ''}
+          onSave={scheduleCount}
+          onClear={nextCount ? clearSchedule : null}
+          onClose={() => setShowSchedule(false)}
+        />
+      )}
+
+      {showSaved && (
+        <div className="modal-backdrop" onClick={() => setShowSaved(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="help-head"><h2>Saved orders</h2><button className="btn-secondary" onClick={() => setShowSaved(false)}>Close</button></div>
+            {savedOrders.length === 0 ? (
+              <div className="empty">No saved orders yet. Build an order list and tap <b>Save order</b>.</div>
+            ) : (
+              <div className="saved-list">
+                {savedOrders.map((o) => (
+                  <div className="saved-row" key={o.id}>
+                    <div className="saved-info">
+                      <div className="saved-title">{fmtDate(o.created_at)} · {o.item_count} item{o.item_count === 1 ? '' : 's'}</div>
+                      {o.placed_by && <div className="saved-sub">by {o.placed_by}</div>}
+                    </div>
+                    <button className="btn-secondary" onClick={() => printSaved(o)}>Print</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="print-area">
-        <h1>Deccan Dental — Order List</h1>
-        <div className="print-date">{today}</div>
+        <h1>Deccan Dental — Order {printTarget?.type === 'saved' ? 'Sheet' : 'List'}</h1>
+        <div className="print-date">{printTarget?.type === 'saved' ? fmtDate(printTarget.order.created_at) : today}</div>
         <table>
           <thead>
             <tr><th className="pc"> </th><th>Item</th><th>SKU</th><th>Supplier</th><th className="pq">Qty</th></tr>
           </thead>
           <tbody>
-            {orderRows.map((o) => (
-              <tr key={o.id} className={o.ordered ? 'pdone' : ''}>
-                <td className="pc">{o.ordered ? '☑' : '☐'}</td>
-                <td>{o.item ? o.item.name : o.item_id}</td>
-                <td>{o.item?.sku || ''}</td>
-                <td>{o.item?.supplier || ''}</td>
-                <td className="pq">{o.qty}</td>
+            {(printTarget?.type === 'saved'
+              ? printTarget.order.lines.map((l, i) => ({ id: 'sv' + i, item_id: l.item_id, name: l.name, sku: l.sku, supplier: l.supplier, qty: l.qty, ordered: false }))
+              : orderRows.map((o) => ({ id: o.id, item_id: o.item_id, name: o.item ? o.item.name : o.item_id, sku: o.item?.sku || '', supplier: o.item?.supplier || '', qty: o.qty, ordered: o.ordered }))
+            ).map((r) => (
+              <tr key={r.id} className={r.ordered ? 'pdone' : ''}>
+                <td className="pc">{r.ordered ? '☑' : '☐'}</td>
+                <td>{r.name}</td>
+                <td>{r.sku}</td>
+                <td>{r.supplier}</td>
+                <td className="pq">{r.qty}</td>
               </tr>
             ))}
           </tbody>
