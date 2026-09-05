@@ -372,6 +372,20 @@ export default function Home() {
 
   const orderCount = orderList.length;
 
+  const archivedMatches = useMemo(() => {
+    if (!search.trim() || showArchived) return [];
+    const q = search.trim().toLowerCase();
+    let list = items.filter((i) => i.archived);
+    if (fCategory) list = list.filter((i) => i.category === fCategory);
+    if (fManufacturer) list = list.filter((i) => i.manufacturer === fManufacturer);
+    if (fSupplier) list = list.filter((i) => i.supplier === fSupplier);
+    list = list.filter((i) =>
+      (i.name || '').toLowerCase().includes(q) ||
+      (i.sku || '').toLowerCase().includes(q) ||
+      (i.item_id || '').toLowerCase().includes(q));
+    return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [items, search, showArchived, fCategory, fManufacturer, fSupplier]);
+
   const grouped = useMemo(() => {
     const g = {};
     visible.forEach((it) => { const c = it.category || 'Uncategorized'; (g[c] ||= []).push(it); });
@@ -561,6 +575,14 @@ export default function Home() {
   }
   function countSkip() { setCounting((c) => ({ ...c, idx: c.idx + 1 })); }
   function countBack() { setCounting((c) => ({ ...c, idx: Math.max(0, c.idx - 1) })); }
+  async function countArchive() {
+    const it = countCurrent();
+    if (!it) return;
+    if (!confirm(`Archive "${it.name}"? It'll be hidden from the active list (not deleted).`)) return;
+    patchItemLocal(it.id, { archived: true });
+    await supabase.from('items').update({ archived: true }).eq('id', it.id);
+    setCounting((c) => ({ ...c, idx: c.idx + 1 }));
+  }
   async function countFinish() {
     const c = counting;
     if (c) await supabase.from('inventory_sessions').update({ status: 'complete', completed_at: new Date().toISOString(), counted: c.counted }).eq('id', c.sessionId);
@@ -774,26 +796,31 @@ export default function Home() {
             </label>
           </div>
 
-          <div className="count">
-            {loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}
-          </div>
-
-          <div className="countbanner">
-            <div className="countbanner-text">
-              <div>{lastCount
-                ? `Last count: ${fmtDate(lastCount.completed_at)}${lastCount.assigned_to ? ' · ' + lastCount.assigned_to : ''}`
-                : 'No inventory count logged yet'}</div>
-              {nextCount && (
-                <div className={nextCount.scheduled_date < new Date().toISOString().slice(0, 10) ? 'nextcount past' : 'nextcount'}>
-                  Next: {fmtDate(nextCount.scheduled_date)}{nextCount.assigned_to ? ' · ' + nextCount.assigned_to : ''}
-                  {nextCount.scheduled_date < new Date().toISOString().slice(0, 10) ? ' · past due' : ''}
-                </div>
-              )}
+          <div className="statusbar">
+            <div className="statusbar-main">
+              <span className="statusbar-label">Inventory</span>
+              {(() => {
+                const t = new Date().toISOString().slice(0, 10);
+                if (!nextCount) return <span className="statuspill none">None scheduled</span>;
+                const s = nextCount.scheduled_date;
+                const st = s > t ? { l: 'Scheduled', c: 'sched' } : s === t ? { l: 'Due today', c: 'due' } : { l: 'Past due', c: 'past' };
+                return (
+                  <>
+                    <span className={'statuspill ' + st.c}>{st.l}</span>
+                    <span className="statusbar-date">{fmtDate(s)}{nextCount.assigned_to ? ' · ' + nextCount.assigned_to : ''}</span>
+                  </>
+                );
+              })()}
+              {lastCount && <span className="statusbar-last">Last done {fmtDate(lastCount.completed_at)}</span>}
             </div>
-            <div className="countbanner-actions">
+            <div className="statusbar-actions">
               <button className="btn-secondary" onClick={() => setShowSchedule(true)}>Schedule</button>
               <button className="btn-scan" onClick={startCount} title="Steps through the items currently shown, one at a time">Start count</button>
             </div>
+          </div>
+
+          <div className="count">
+            {loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}
           </div>
 
           {visible.length > 0 && (
@@ -817,6 +844,13 @@ export default function Home() {
           ) : (
             <div className="item-list">
               {visible.map((item) => itemRow(item))}
+            </div>
+          )}
+
+          {archivedMatches.length > 0 && (
+            <div className="archived-section">
+              <div className="archived-head">Archived · {archivedMatches.length} match{archivedMatches.length === 1 ? '' : 'es'}</div>
+              <div className="item-list archived-list">{archivedMatches.map((item) => itemRow(item))}</div>
             </div>
           )}
         </>
@@ -1082,6 +1116,7 @@ export default function Home() {
                 <div className="count-actions">
                   <button className="btn-secondary" onClick={countBack} disabled={counting.idx === 0}>← Back</button>
                   <button className="btn-ghost" onClick={countSkip}>Skip →</button>
+                  <button className="btn-ghost count-archive" onClick={countArchive}>Archive</button>
                 </div>
                 <button className="count-finish" onClick={() => { if (confirm('Finish and log this count now?')) countFinish(); }}>Finish count early</button>
               </div>
