@@ -39,6 +39,28 @@ function StatusBadge({ item }) {
   return <span className="badge ok">OK</span>;
 }
 
+function fmtDate(ts) {
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' }); }
+  catch (_) { return ''; }
+}
+
+// Number entry used in the guided count flow
+function CountInput({ initial, onSave }) {
+  const [v, setV] = useState(String(initial ?? 0));
+  const n = () => parseInt(v || '0', 10) || 0;
+  return (
+    <div className="count-input-wrap">
+      <div className="count-stepper">
+        <button type="button" onClick={() => setV(String(Math.max(0, n() - 1)))}>−</button>
+        <input type="number" min="0" value={v} onChange={(e) => setV(e.target.value)} autoFocus />
+        <button type="button" onClick={() => setV(String(n() + 1))}>+</button>
+      </div>
+      <button type="button" className="btn-primary count-save" onClick={() => onSave(n())}>Save &amp; next →</button>
+    </div>
+  );
+}
+
 function Field({ label, children, full }) {
   return (
     <label className={full ? 'field full' : 'field'}>
@@ -215,6 +237,8 @@ export default function Home() {
   const [kitSearch, setKitSearch] = useState('');
   const [showHelp, setShowHelp] = useState(false);
   const [zoomImg, setZoomImg] = useState(null);
+  const [counting, setCounting] = useState(null);
+  const [lastCount, setLastCount] = useState(null);
 
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*');
@@ -238,13 +262,19 @@ export default function Home() {
     setSetRows(data || []);
   }, []);
 
+  const fetchLastCount = useCallback(async () => {
+    const { data } = await supabase.from('inventory_sessions').select('*')
+      .eq('status', 'complete').order('completed_at', { ascending: false }).limit(1);
+    setLastCount(data && data[0] ? data[0] : null);
+  }, []);
+
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows()]);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount()]);
       setLoading(false);
     })();
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -360,8 +390,24 @@ export default function Home() {
 
   async function toggleOrderForItem(item) {
     const existing = orderList.find((o) => o.item_id === item.item_id);
-    if (existing) await removeFromOrder(existing.id);
-    else await addItemToOrder(item);
+    if (existing) { await removeFromOrder(existing.id); return; }
+    if (item.ordered_at && !confirm(`This item is already marked ON ORDER (since ${fmtDate(item.ordered_at)}). Add it to the order list again?`)) return;
+    await addItemToOrder(item);
+  }
+
+  function patchItemByCode(itemId, patch) {
+    setItems((l) => l.map((i) => (i.item_id === itemId ? { ...i, ...patch } : i)));
+  }
+  async function markOrdered(item) {
+    const stamp = new Date().toISOString();
+    patchItemByCode(item.item_id, { ordered_at: stamp });
+    setEditing((e) => (e && e.item_id === item.item_id ? { ...e, ordered_at: stamp } : e));
+    await supabase.from('items').update({ ordered_at: stamp }).eq('item_id', item.item_id);
+  }
+  async function markReceived(item) {
+    patchItemByCode(item.item_id, { ordered_at: null });
+    setEditing((e) => (e && e.item_id === item.item_id ? { ...e, ordered_at: null } : e));
+    await supabase.from('items').update({ ordered_at: null }).eq('item_id', item.item_id);
   }
 
   async function removeFromOrder(entryId) {
@@ -370,9 +416,12 @@ export default function Home() {
   }
 
   async function toggleOrdered(entry) {
-    setOrderList((l) => l.map((o) => (o.id === entry.id ? { ...o, ordered: !o.ordered } : o)));
-    const { error } = await supabase.from('order_list').update({ ordered: !entry.ordered }).eq('id', entry.id);
-    if (error) fetchOrderList();
+    const newOrdered = !entry.ordered;
+    setOrderList((l) => l.map((o) => (o.id === entry.id ? { ...o, ordered: newOrdered } : o)));
+    await supabase.from('order_list').update({ ordered: newOrdered }).eq('id', entry.id);
+    const stamp = newOrdered ? new Date().toISOString() : null;
+    patchItemByCode(entry.item_id, { ordered_at: stamp });
+    await supabase.from('items').update({ ordered_at: stamp }).eq('item_id', entry.item_id);
   }
 
   function changeQty(entryId, val) {
@@ -420,12 +469,45 @@ export default function Home() {
   }
   async function saveQty(item, qty) {
     const q = Math.max(0, Number.isFinite(qty) ? qty : 0);
-    patchItemLocal(item.id, { current_qty: q });
-    const { error } = await supabase.from('items').update({ current_qty: q }).eq('id', item.id);
+    const now = new Date().toISOString();
+    const patch = { current_qty: q, qty_updated_at: now };
+    if (item.ordered_at && item.par_level != null && q > Number(item.par_level)) patch.ordered_at = null;
+    patchItemLocal(item.id, patch);
+    const { error } = await supabase.from('items').update(patch).eq('id', item.id);
     if (error) { alert('Could not update qty: ' + error.message); fetchItems(); }
   }
   function bumpQty(item, delta) {
     saveQty(item, Number(item.current_qty ?? 0) + delta);
+  }
+
+  async function startCount() {
+    const ids = visible.map((i) => i.id);
+    if (ids.length === 0) { alert('No items in the current view to count.'); return; }
+    const assignee = (prompt('Who is doing this count? (optional)') || '').trim() || null;
+    const { data, error } = await supabase.from('inventory_sessions')
+      .insert({ status: 'in_progress', started_at: new Date().toISOString(), assigned_to: assignee, label: 'Count ' + new Date().toLocaleDateString() })
+      .select().single();
+    if (error) { alert('Could not start count: ' + error.message); return; }
+    setCounting({ sessionId: data.id, ids, idx: 0, counted: 0 });
+  }
+  function countCurrent() { return counting ? items.find((i) => i.id === counting.ids[counting.idx]) : null; }
+  async function countSave(newQty) {
+    const it = countCurrent();
+    if (it) await saveQty(it, newQty);
+    setCounting((c) => ({ ...c, idx: c.idx + 1, counted: c.counted + 1 }));
+  }
+  function countSkip() { setCounting((c) => ({ ...c, idx: c.idx + 1 })); }
+  function countBack() { setCounting((c) => ({ ...c, idx: Math.max(0, c.idx - 1) })); }
+  async function countFinish() {
+    const c = counting;
+    if (c) await supabase.from('inventory_sessions').update({ status: 'complete', completed_at: new Date().toISOString(), counted: c.counted }).eq('id', c.sessionId);
+    setCounting(null);
+    fetchLastCount();
+  }
+  async function countCancel() {
+    if (!confirm("Stop this count? Any counts you already entered are saved, but this session won't be logged as complete.")) return;
+    if (counting) await supabase.from('inventory_sessions').delete().eq('id', counting.sessionId);
+    setCounting(null);
   }
 
   const num = (v) => (v === '' || v == null ? null : Number(v));
@@ -526,7 +608,9 @@ export default function Home() {
             <span className="idpill">{item.item_id}</span>
             {item.category && <span className="chip" style={catStyle(item.category)}>{item.category}</span>}
             {otherSets > 0 && <span className="chip setchip">in {otherSets} other set{otherSets === 1 ? '' : 's'}</span>}
+            {item.ordered_at && <span className="chip onorder">on order · {fmtDate(item.ordered_at)}</span>}
             {item.supplier && <span className="row-supplier">{item.supplier}</span>}
+            {item.qty_updated_at && <span className="row-updated">counted {fmtDate(item.qty_updated_at)}</span>}
           </div>
         </div>
         <div className="row-right">
@@ -629,6 +713,15 @@ export default function Home() {
 
           <div className="count">
             {loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}
+          </div>
+
+          <div className="countbanner">
+            <span className="countbanner-text">
+              {lastCount
+                ? `Last count: ${fmtDate(lastCount.completed_at)}${lastCount.assigned_to ? ' · ' + lastCount.assigned_to : ''}`
+                : 'No inventory count logged yet'}
+            </span>
+            <button className="btn-scan" onClick={startCount} title="Steps through the items currently shown, one at a time">Start count</button>
           </div>
 
           {visible.length > 0 && (
@@ -788,6 +881,19 @@ export default function Home() {
                 </div>
               </div>
 
+              {editing.id && (
+                <div className="onorder-row">
+                  {editing.ordered_at ? (
+                    <>
+                      <span className="chip onorder">ON ORDER · {fmtDate(editing.ordered_at)}</span>
+                      <button type="button" className="btn-secondary" onClick={() => markReceived(editing)}>Mark received</button>
+                    </>
+                  ) : (
+                    <button type="button" className="btn-ghost" onClick={() => markOrdered(editing)}>Mark as ordered</button>
+                  )}
+                </div>
+              )}
+
               <Field label="Item ID *"><input value={editing.item_id} onChange={(e) => setEditing({ ...editing, item_id: e.target.value })} /></Field>
               <Field label="Name *"><input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
               <Field label="Category">
@@ -870,6 +976,45 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {counting && (() => {
+        const it = countCurrent();
+        const total = counting.ids.length;
+        const done = counting.idx >= total;
+        const pct = total ? Math.round((Math.min(counting.idx, total) / total) * 100) : 0;
+        return (
+          <div className="count-overlay">
+            <div className="count-top">
+              <div className="count-progress">{done ? total : counting.idx + 1} / {total}</div>
+              <div className="count-bar"><div className="count-bar-fill" style={{ width: pct + '%' }} /></div>
+              <button className="count-x" onClick={countCancel} aria-label="Stop count">✕</button>
+            </div>
+            {done ? (
+              <div className="count-done">
+                <div className="count-done-check">✓</div>
+                <h2>Count complete</h2>
+                <p>You counted {counting.counted} of {total} item{total === 1 ? '' : 's'}.</p>
+                <button className="btn-primary" onClick={countFinish}>Finish &amp; log it</button>
+              </div>
+            ) : it ? (
+              <div className="count-card">
+                <div className="count-photo">
+                  {it.image_url ? <img src={it.image_url} alt="" onClick={() => setZoomImg(it.image_url)} /> : <div className="noimg big">No photo</div>}
+                </div>
+                <div className="count-name">{it.name}</div>
+                <div className="count-meta"><span className="idpill">{it.item_id}</span>{it.category ? ' · ' + it.category : ''}{it.par_level != null ? ' · par ' + it.par_level : ''}</div>
+                <div className="count-current">On record: <b>{it.current_qty ?? 0}</b>{it.qty_updated_at ? ` · last counted ${fmtDate(it.qty_updated_at)}` : ''}</div>
+                <CountInput key={it.id} initial={it.current_qty ?? 0} onSave={countSave} />
+                <div className="count-actions">
+                  <button className="btn-secondary" onClick={countBack} disabled={counting.idx === 0}>← Back</button>
+                  <button className="btn-ghost" onClick={countSkip}>Skip →</button>
+                </div>
+                <button className="count-finish" onClick={() => { if (confirm('Finish and log this count now?')) countFinish(); }}>Finish count early</button>
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
 
       {zoomImg && (
         <div className="lightbox" onClick={() => setZoomImg(null)}>
