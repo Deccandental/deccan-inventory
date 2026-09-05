@@ -333,3 +333,24 @@ input, select, textarea { font: inherit; }
 .saved-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
 .saved-title { font-weight: 600; font-size: 14px; color: var(--ink-dk); }
 .saved-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* ---- compact inventory status strip ---- */
+.statusbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 4px 0 10px; }
+.statusbar-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--slate); }
+.statusbar-label { font-weight: 700; color: var(--ink-dk); }
+.statuspill { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; text-transform: uppercase; letter-spacing: .04em; }
+.statuspill.sched { background: #e2f1e4; color: #1f7a34; }
+.statuspill.due { background: #fff1e6; color: #b3441a; }
+.statuspill.past { background: var(--reorder); color: var(--reorder-t); }
+.statuspill.none { background: #eee; color: #888; }
+.statusbar-date { color: var(--ink-dk); font-weight: 600; }
+.statusbar-last { color: var(--muted); }
+.statusbar-actions { display: flex; gap: 8px; align-items: center; }
+.count-archive { color: var(--reorder-t); }
+
+/* ---- archived matches under search ---- */
+.archived-section { margin-top: 18px; }
+.archived-head { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 2px 6px; border-top: 1px dashed var(--line); padding-top: 12px; }
+.archived-list .item-row { background: #fafafa; opacity: .62; }
+.archived-list .item-row:hover { opacity: .9; }
