@@ -45,21 +45,33 @@ function fmtDate(ts) {
   catch (_) { return ''; }
 }
 
-// Small modal to schedule the next inventory count
-function ScheduleModal({ initialDate, initialWho, onSave, onClear, onClose }) {
-  const [date, setDate] = useState(initialDate || '');
-  const [who, setWho] = useState(initialWho || '');
+// Modal to manage the inventory schedule — list, add, and remove dates
+function ScheduleModal({ schedules, onAdd, onRemove, onClose }) {
+  const [date, setDate] = useState('');
+  const [who, setWho] = useState('');
+  const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal sched-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Schedule next count</h2>
-        <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
-        <Field label="Assigned to (optional)"><input value={who} onChange={(e) => setWho(e.target.value)} placeholder="Name" /></Field>
-        <div className="modal-actions">
-          {onClear && <button className="btn-ghost" onClick={onClear}>Clear</button>}
-          <div className="spacer" />
-          <button className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={!date} onClick={() => onSave(date, who.trim())}>Save</button>
+        <div className="help-head"><h2>Inventory schedule</h2><button className="btn-secondary" onClick={onClose}>Close</button></div>
+        {schedules.length > 0 && (
+          <div className="sched-list">
+            {schedules.map((s) => (
+              <div className="sched-item" key={s.id}>
+                <div>
+                  <span className={s.scheduled_date < today ? 'sched-date past' : 'sched-date'}>{fmtDate(s.scheduled_date)}</span>
+                  {s.assigned_to && <span className="sched-who"> · {s.assigned_to}</span>}
+                  {s.scheduled_date < today && <span className="sched-pastlbl"> · past due</span>}
+                </div>
+                <button className="order-x" title="Remove this date" onClick={() => onRemove(s.id)}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="sched-add">
+          <Field label="Add a date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+          <Field label="Assigned to (optional)"><input value={who} onChange={(e) => setWho(e.target.value)} placeholder="Name" /></Field>
+          <button className="btn-primary" disabled={!date} onClick={() => { onAdd(date, who.trim()); setDate(''); setWho(''); }}>Add date</button>
         </div>
       </div>
     </div>
@@ -260,7 +272,7 @@ export default function Home() {
   const [zoomImg, setZoomImg] = useState(null);
   const [counting, setCounting] = useState(null);
   const [lastCount, setLastCount] = useState(null);
-  const [nextCount, setNextCount] = useState(null);
+  const [schedules, setSchedules] = useState([]);
   const [showSchedule, setShowSchedule] = useState(false);
   const [savedOrders, setSavedOrders] = useState([]);
   const [showSaved, setShowSaved] = useState(false);
@@ -294,10 +306,10 @@ export default function Home() {
     setLastCount(data && data[0] ? data[0] : null);
   }, []);
 
-  const fetchNextCount = useCallback(async () => {
+  const fetchSchedules = useCallback(async () => {
     const { data } = await supabase.from('inventory_sessions').select('*')
-      .eq('status', 'scheduled').order('scheduled_date', { ascending: true }).limit(1);
-    setNextCount(data && data[0] ? data[0] : null);
+      .eq('status', 'scheduled').order('scheduled_date', { ascending: true });
+    setSchedules(data || []);
   }, []);
 
   const fetchSavedOrders = useCallback(async () => {
@@ -308,10 +320,10 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchNextCount(), fetchSavedOrders()]);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
       setLoading(false);
     })();
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchNextCount, fetchSavedOrders]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -371,6 +383,7 @@ export default function Home() {
   }, [orderList, itemByCode]);
 
   const orderCount = orderList.length;
+  const nextCount = schedules[0] || null;
 
   const archivedMatches = useMemo(() => {
     if (!search.trim() || showArchived) return [];
@@ -495,16 +508,13 @@ export default function Home() {
   function printList() { setPrintTarget({ type: 'live' }); setTimeout(() => window.print(), 60); }
   function printSaved(order) { setPrintTarget({ type: 'saved', order }); setShowSaved(false); setTimeout(() => window.print(), 120); }
 
-  async function scheduleCount(date, who) {
-    await supabase.from('inventory_sessions').delete().eq('status', 'scheduled');
+  async function scheduleAdd(date, who) {
     await supabase.from('inventory_sessions').insert({ status: 'scheduled', scheduled_date: date, assigned_to: who || null, label: 'Scheduled count' });
-    setShowSchedule(false);
-    fetchNextCount();
+    fetchSchedules();
   }
-  async function clearSchedule() {
-    await supabase.from('inventory_sessions').delete().eq('status', 'scheduled');
-    setShowSchedule(false);
-    fetchNextCount();
+  async function scheduleRemove(id) {
+    setSchedules((l) => l.filter((s) => s.id !== id));
+    await supabase.from('inventory_sessions').delete().eq('id', id);
   }
 
   async function saveOrder() {
@@ -1146,10 +1156,9 @@ export default function Home() {
       {/* Print-only order sheet */}
       {showSchedule && (
         <ScheduleModal
-          initialDate={nextCount?.scheduled_date || ''}
-          initialWho={nextCount?.assigned_to || ''}
-          onSave={scheduleCount}
-          onClear={nextCount ? clearSchedule : null}
+          schedules={schedules}
+          onAdd={scheduleAdd}
+          onRemove={scheduleRemove}
           onClose={() => setShowSchedule(false)}
         />
       )}
