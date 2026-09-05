@@ -323,3 +323,13 @@ input, select, textarea { font: inherit; }
 /* ---- on-order status ---- */
 .chip.onorder { background: #e4edff; color: #2c4a8f; }
 .onorder-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 4px; }
+
+/* ---- schedule banner + saved orders ---- */
+.countbanner-actions { display: flex; gap: 8px; align-items: center; }
+.nextcount { font-size: 12px; color: var(--slate); margin-top: 2px; }
+.nextcount.past { color: var(--reorder-t); font-weight: 700; }
+.sched-modal { max-width: 380px; }
+.saved-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.saved-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.saved-title { font-weight: 600; font-size: 14px; color: var(--ink-dk); }
+.saved-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
