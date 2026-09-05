@@ -354,3 +354,12 @@ input, select, textarea { font: inherit; }
 .archived-head { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 2px 6px; border-top: 1px dashed var(--line); padding-top: 12px; }
 .archived-list .item-row { background: #fafafa; opacity: .62; }
 .archived-list .item-row:hover { opacity: .9; }
+
+/* ---- schedule manager ---- */
+.sched-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 16px; }
+.sched-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; }
+.sched-date { font-weight: 700; color: var(--ink-dk); }
+.sched-date.past { color: var(--reorder-t); }
+.sched-who { color: var(--muted); font-size: 13px; }
+.sched-pastlbl { color: var(--reorder-t); font-size: 12px; font-weight: 700; }
+.sched-add { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
