@@ -24,8 +24,9 @@ function catStyle(name) {
 
 function stockState(item) {
   if (item.par_level == null || item.par_level === '') return null;
-  const qty = Number(item.current_qty ?? 0);
   const par = Number(item.par_level);
+  if (par <= 0) return null; // par 0 = not needed / not tracked → never flag
+  const qty = Number(item.current_qty ?? 0);
   if (qty <= 0) return 'out';
   if (qty <= par) return 'low';
   return 'ok';
@@ -717,7 +718,7 @@ export default function Home() {
             <button className="qty-btn" onClick={() => bumpQty(item, 1)} aria-label="increase">+</button>
           </div>
           <div className="row-meta-line">
-            {item.par_level != null && <span className="par-note">par {item.par_level}</span>}
+            {item.par_level != null && Number(item.par_level) > 0 && <span className="par-note">par {item.par_level}</span>}
             <StatusBadge item={item} />
           </div>
         </div>
