@@ -9,7 +9,11 @@ export function middleware(request) {
     return NextResponse.next();
   }
   const token = request.cookies.get('dd_auth')?.value;
-  if (token && token === process.env.APP_SESSION_SECRET) {
+  const secret = process.env.APP_SESSION_SECRET;
+  if (
+    secret && token &&
+    (token === secret || token === `${secret}.viewer` || token === `${secret}.cpa`)
+  ) {
     return NextResponse.next();
   }
   const url = request.nextUrl.clone();

@@ -17,13 +17,22 @@ local `.env.local` file if you run it on your machine:
 | `APP_PASSWORD` | The shared password staff type to get in |
 | `APP_SESSION_SECRET` | A long random string (already generated in `.env.example`) |
 
+Optional extra logins (all use the same app, different passwords):
+
+| Variable | Role |
+|---|---|
+| `APP_PASSWORD` | Admin — full access, can add/edit/delete Set-ups |
+| `APP_VIEWER_PASSWORD` | Viewer — can view Set-ups, not change them |
+| `APP_CPA_PASSWORD` | CPA — Set-ups tab hidden |
+
 ## Deploy
 
 1. Run `01_supabase_setup.sql` in the Supabase SQL Editor first (creates the table,
    imports the 225 supplies, and makes the `item-images` storage bucket).
 2. Put this project in a GitHub repo.
-3. In Vercel, import the repo, add the four environment variables above, and deploy.
-4. Open the URL, enter the password, and you're in.
+3. For Set-ups, also run `02_setups.sql` in the Supabase SQL Editor.
+4. In Vercel, import the repo, add the four environment variables above, and deploy.
+5. Open the URL, enter the password, and you're in.
 
 ## Notes
 

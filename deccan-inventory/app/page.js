@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { Field, PickOrNew, StatusBadge, stockState, fmtDate } from './ui';
+import { compressImage } from '../lib/image';
+import SetupsView from './SetupsView';
 
 const EMPTY = {
   item_id: '', name: '', category: '', sku: '', manufacturer: '', supplier: '',
@@ -22,29 +25,7 @@ function catStyle(name) {
   return { background: bg, color: fg };
 }
 
-function stockState(item) {
-  if (item.par_level == null || item.par_level === '') return null;
-  const par = Number(item.par_level);
-  if (par <= 0) return null; // par 0 = not needed / not tracked → never flag
-  const qty = Number(item.current_qty ?? 0);
-  if (qty <= 0) return 'out';
-  if (qty <= par) return 'low';
-  return 'ok';
-}
 
-function StatusBadge({ item }) {
-  const s = stockState(item);
-  if (!s) return null;
-  if (s === 'out') return <span className="badge out">OUT</span>;
-  if (s === 'low') return <span className="badge reorder">LOW</span>;
-  return <span className="badge ok">OK</span>;
-}
-
-function fmtDate(ts) {
-  if (!ts) return '';
-  try { return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' }); }
-  catch (_) { return ''; }
-}
 
 // Modal to manage the inventory schedule — list, add, and remove dates
 function ScheduleModal({ schedules, onAdd, onRemove, onClose }) {
@@ -95,43 +76,6 @@ function CountInput({ initial, onSave }) {
   );
 }
 
-function Field({ label, children, full }) {
-  return (
-    <label className={full ? 'field full' : 'field'}>
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-// Real dropdown of existing options + an explicit "New…" choice.
-// Reliable on every device (native select), and only creates a new
-// value when the user deliberately picks "New…".
-function PickOrNew({ value, options, onChange, noun }) {
-  const NEW = '__new__';
-  const [custom, setCustom] = useState(value !== '' && value != null && !options.includes(value));
-  if (custom) {
-    return (
-      <div className="pick-new">
-        <input autoFocus value={value || ''} placeholder={`New ${noun} name`}
-          onChange={(e) => onChange(e.target.value)} />
-        <button type="button" className="btn-secondary pick-back"
-          onClick={() => { onChange(''); setCustom(false); }}>List</button>
-      </div>
-    );
-  }
-  return (
-    <select value={options.includes(value) ? value : ''}
-      onChange={(e) => {
-        if (e.target.value === NEW) { onChange(''); setCustom(true); }
-        else onChange(e.target.value);
-      }}>
-      <option value="">— Select —</option>
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
-      <option value={NEW}>➕ New {noun}…</option>
-    </select>
-  );
-}
 
 async function safeStop(scanner) {
   if (!scanner) return;
@@ -142,29 +86,6 @@ async function safeStop(scanner) {
   try { scanner.clear(); } catch (_) {}
 }
 
-// Resize + re-encode an image in the browser before upload.
-// Falls back to the original file if anything goes wrong (e.g. HEIC that
-// the canvas can't decode). Keeps stored photos small (~150-300 KB).
-async function compressImage(file, maxDim = 1200, quality = 0.82) {
-  try {
-    if (!file.type || !file.type.startsWith('image/')) return file;
-    const dataUrl = await new Promise((res, rej) => {
-      const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
-    });
-    const img = await new Promise((res, rej) => {
-      const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl;
-    });
-    let w = img.width, h = img.height;
-    if (Math.max(w, h) > maxDim) { const s = maxDim / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
-    return blob && blob.size < file.size ? blob : file;
-  } catch (_) {
-    return file;
-  }
-}
 
 // mode: 'open' -> stop + onResult(code); 'add' -> keep running, call onAdd(code) per scan
 function QRScanner({ mode, title, onResult, onAdd, onClose }) {
@@ -278,6 +199,11 @@ export default function Home() {
   const [savedOrders, setSavedOrders] = useState([]);
   const [showSaved, setShowSaved] = useState(false);
   const [printTarget, setPrintTarget] = useState(null);
+  const [role, setRole] = useState('admin'); // 'admin' | 'viewer' | 'cpa' (real value comes from /api/me)
+  const [setups, setSetups] = useState([]);
+  const [setupOpen, setSetupOpen] = useState(null); // { id, num, edit } | null
+  const isAdmin = role === 'admin';
+  const canSetups = role !== 'cpa';
 
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*');
@@ -318,13 +244,23 @@ export default function Home() {
     setSavedOrders(data || []);
   }, []);
 
+  const fetchSetups = useCallback(async () => {
+    const { data, error } = await supabase.from('setups').select('*').order('created_at', { ascending: false });
+    if (error) { console.error(error); return; } // table not created yet -> just show none
+    setSetups(data || []);
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/me').then((r) => r.json()).then((d) => { if (d?.role && d.role !== 'none') setRole(d.role); }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
       setLoading(false);
     })();
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -419,6 +355,18 @@ export default function Home() {
     });
     return 'SUP-' + String(max + 1).padStart(4, '0');
   }
+
+  // item_id -> [{ setup, num }] for the "Appears in set-ups" list on an item
+  const itemSetups = useMemo(() => {
+    const m = {};
+    setups.forEach((s) => (s.points || []).forEach((p, i) => {
+      if (p.item_id) (m[p.item_id] ||= []).push({ setup: s, num: i + 1 });
+    }));
+    return m;
+  }, [setups]);
+
+  function goToItem(item) { setSetupOpen(null); setView('items'); openEdit(item); }
+  function openSetupAt(setupId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setupId, num }); }
 
   function openAdd() { setEditing({ ...EMPTY, item_id: nextItemId() }); }
   function openEdit(item) {
@@ -774,6 +722,11 @@ export default function Home() {
         <button className={view === 'sets' ? 'navtab on' : 'navtab'} onClick={() => { setView('sets'); setActiveSet(null); }}>
           Sets{sets.length ? ` (${sets.length})` : ''}
         </button>
+        {canSetups && (
+          <button className={view === 'setups' ? 'navtab on' : 'navtab'} onClick={() => { setView('setups'); setActiveSet(null); }}>
+            📸 Set-ups{setups.length ? ` (${setups.length})` : ''}
+          </button>
+        )}
         <div className="navbar-spacer" />
         {lowCount > 0 && (
           <button className={fLow ? 'navlow on' : 'navlow'} onClick={() => { setView('items'); setFLow((v) => !v); }}>
@@ -902,6 +855,11 @@ export default function Home() {
         </>
       )}
 
+      {view === 'setups' && canSetups && (
+        <SetupsView setups={setups} items={items} itemByCode={itemByCode} isAdmin={isAdmin}
+          open={setupOpen} setOpen={setSetupOpen} onChanged={fetchSetups} onGoToItem={goToItem} />
+      )}
+
       {view === 'sets' && !activeSet && (
         <>
           <div className="order-toolbar">
@@ -1013,6 +971,19 @@ export default function Home() {
                 </div>
               )}
 
+              {editing.id && canSetups && (itemSetups[editing.item_id] || []).length > 0 && (
+                <div className="field full">
+                  <span>Appears in set-ups</span>
+                  <div className="setup-appears">
+                    {itemSetups[editing.item_id].map(({ setup, num }) => (
+                      <button type="button" key={setup.id + num} className="btn-secondary sm" onClick={() => openSetupAt(setup.id, num)}>
+                        📸 {setup.title} · #{num}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <Field label="Item ID *"><input value={editing.item_id} onChange={(e) => setEditing({ ...editing, item_id: e.target.value })} /></Field>
               <Field label="Name *"><input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
               <Field label="Category">
@@ -1078,6 +1049,10 @@ export default function Home() {
 
               <h3>Sets (kits)</h3>
               <p>The <b>Sets</b> tab groups items into kits (e.g. &ldquo;Crown Bur Set&rdquo;). Open a set, then <b>search</b> or <b>Scan to add</b> to put items in, and <b>✕</b> to take them out. An item can live in several sets — its stock and details are shared, so a change anywhere updates it everywhere. A row shows <b>&ldquo;in N other sets&rdquo;</b> when it&apos;s shared.</p>
+
+              <h3>Set-ups (photos with numbered dots)</h3>
+              <p>The <b>📸 Set-ups</b> tab holds photos of trays, operatories and cabinets with numbered dots on them. Tap a set-up to see its photo and index. Tick <b>Show numbers on photo</b> to show or hide the dots. Each numbered line can be linked to an inventory item: it shows the live count and LOW/OUT status, and <b>Open item ›</b> jumps to that item. Open any item to see which set-ups it appears in.</p>
+              <p>Admins: <b>+ Add set-up</b>, then <b>Edit</b> — tap the photo to drop a dot, drag dots to move them, type what each is, <b>Link item</b> to tie it to inventory, and use ↑ ↓ to reorder (numbers follow).</p>
 
               <h3>Adding &amp; editing items</h3>
               <p><b>+ Add item</b> creates a new one. Category, Manufacturer, and Supplier are dropdowns — pick an existing value, or choose <b>➕ New…</b> to create one. <b>Add / change photo</b> uses the camera (photos are shrunk automatically, so they load fast and barely use storage).</p>
