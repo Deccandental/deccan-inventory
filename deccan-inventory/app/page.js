@@ -152,7 +152,7 @@ function QRScanner({ mode, title, onResult, onAdd, onClose }) {
           ? <p className="error">Camera couldn&apos;t start on this device: {err}. Use the box below instead.</p>
           : <p className="hint">{mode === 'add'
               ? 'Scan each label to add it — keep going, then tap Done.'
-              : 'Point the camera at a label\u2019s QR code — or type the ID below.'}</p>}
+              : 'Point the camera at a label’s QR code — or type the ID below.'}</p>}
         <Field label="Or enter the Item ID" full>
           <input value={manual} placeholder="e.g. SUP-0007"
             onChange={(e) => setManual(e.target.value)}
