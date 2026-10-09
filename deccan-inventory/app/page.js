@@ -205,9 +205,13 @@ export default function Home() {
   const isAdmin = role === 'admin';
   const canSetups = role !== 'cpa';
 
-  const fetchItems = useCallback(async () => {
+  const fetchItems = useCallback(async (silent) => {
     const { data, error } = await supabase.from('items').select('*');
-    if (error) { console.error(error); alert('Could not load items: ' + error.message); }
+    if (error) {
+      console.error(error);
+      if (silent !== true) alert('Could not load items: ' + error.message);
+      return; // keep what's on screen if a refresh fails
+    }
     setItems(data || []);
   }, []);
 
@@ -253,6 +257,39 @@ export default function Home() {
   useEffect(() => {
     fetch('/api/me').then((r) => r.json()).then((d) => { if (d?.role && d.role !== 'none') setRole(d.role); }).catch(() => {});
   }, []);
+
+  // ---- keep every device current ----
+  // Re-pull everything when the app comes back to the foreground (the iPad home-screen app stays
+  // alive in the background), and every 30s while it's open. Skipped while you're typing, editing
+  // an item or counting, so a refresh never overwrites something half-entered.
+  const [refreshing, setRefreshing] = useState(false);
+  const busyRef = useRef(false);
+  busyRef.current = !!(editing || counting || setupOpen || scanning || showSchedule || showSaved);
+  const refreshAll = useCallback(async (manual) => {
+    if (manual !== true) {
+      const el = typeof document !== 'undefined' ? document.activeElement : null;
+      const typing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+      if (busyRef.current || typing) return;
+    }
+    setRefreshing(true);
+    await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
+    setRefreshing(false);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
+
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshAll(); };
+    const onShow = () => refreshAll();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onShow);
+    window.addEventListener('pageshow', onShow);
+    const t = setInterval(() => { if (document.visibilityState === 'visible') refreshAll(); }, 30000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onShow);
+      window.removeEventListener('pageshow', onShow);
+      clearInterval(t);
+    };
+  }, [refreshAll]);
 
   useEffect(() => {
     (async () => {
@@ -708,6 +745,7 @@ export default function Home() {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M2 3h3l2.4 12h11l2-8H6" /></svg>
               {orderCount > 0 && <span className="cart-count">{orderCount}</span>}
             </button>
+            <button className="btn-ghost" onClick={() => refreshAll(true)} disabled={refreshing} title="Refresh now">{refreshing ? '…' : '↻'}</button>
             <button className="btn-ghost" onClick={() => setShowHelp(true)}>Help</button>
             <button className="btn-ghost" onClick={logout}>Log out</button>
           </div>
