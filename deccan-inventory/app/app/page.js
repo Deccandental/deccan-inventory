@@ -1,0 +1,1321 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
+import { Field, PickOrNew, StatusBadge, stockState, fmtDate } from './ui';
+import { compressImage } from '../lib/image';
+import SetupsView from './SetupsView';
+
+const EMPTY = {
+  item_id: '', name: '', category: '', sku: '', manufacturer: '', supplier: '',
+  storage_location: '', current_qty: '', par_level: '', reorder_qty: '',
+  expiration_date: '', order_link: '', unit_price: '', last_ordered: '', notes: '', image_url: '',
+};
+
+const CAT_COLORS = [
+  ['#ffe8dd', '#b3441a'], ['#e4edff', '#2c4a8f'], ['#e6f6ea', '#1c6b2c'],
+  ['#f3e8ff', '#6b2fae'], ['#fff4d6', '#8a6100'], ['#e2f5f5', '#0a5252'],
+  ['#ffe4ee', '#9c1b4a'], ['#eceff1', '#455a64'], ['#e8f0d8', '#4a6b12'],
+  ['#fde6e6', '#9c1b1b'], ['#e0f0ff', '#12608a'], ['#efe7de', '#6b4a2f'],
+];
+function catStyle(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  const [bg, fg] = CAT_COLORS[h % CAT_COLORS.length];
+  return { background: bg, color: fg };
+}
+
+
+
+// Modal to manage the inventory schedule — list, add, and remove dates
+function ScheduleModal({ schedules, onAdd, onRemove, onClose }) {
+  const [date, setDate] = useState('');
+  const [who, setWho] = useState('');
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal sched-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="help-head"><h2>Inventory schedule</h2><button className="btn-secondary" onClick={onClose}>Close</button></div>
+        {schedules.length > 0 && (
+          <div className="sched-list">
+            {schedules.map((s) => (
+              <div className="sched-item" key={s.id}>
+                <div>
+                  <span className={s.scheduled_date < today ? 'sched-date past' : 'sched-date'}>{fmtDate(s.scheduled_date)}</span>
+                  {s.assigned_to && <span className="sched-who"> · {s.assigned_to}</span>}
+                  {s.scheduled_date < today && <span className="sched-pastlbl"> · past due</span>}
+                </div>
+                <button className="order-x" title="Remove this date" onClick={() => onRemove(s.id)}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="sched-add">
+          <Field label="Add a date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+          <Field label="Assigned to (optional)"><input value={who} onChange={(e) => setWho(e.target.value)} placeholder="Name" /></Field>
+          <button className="btn-primary" disabled={!date} onClick={() => { onAdd(date, who.trim()); setDate(''); setWho(''); }}>Add date</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Number entry used in the guided count flow
+function CountInput({ initial, onSave }) {
+  const [v, setV] = useState(String(initial ?? 0));
+  const n = () => parseInt(v || '0', 10) || 0;
+  return (
+    <div className="count-input-wrap">
+      <div className="count-stepper">
+        <button type="button" onClick={() => setV(String(Math.max(0, n() - 1)))}>−</button>
+        <input type="number" min="0" value={v} onChange={(e) => setV(e.target.value)} autoFocus />
+        <button type="button" onClick={() => setV(String(n() + 1))}>+</button>
+      </div>
+      <button type="button" className="btn-primary count-save" onClick={() => onSave(n())}>Save &amp; next →</button>
+    </div>
+  );
+}
+
+
+async function safeStop(scanner) {
+  if (!scanner) return;
+  try {
+    const state = typeof scanner.getState === 'function' ? scanner.getState() : null;
+    if (state === 2 || state === 3) await scanner.stop();
+  } catch (_) {}
+  try { scanner.clear(); } catch (_) {}
+}
+
+
+// mode: 'open' -> stop + onResult(code); 'add' -> keep running, call onAdd(code) per scan
+function QRScanner({ mode, title, onResult, onAdd, onClose }) {
+  const [err, setErr] = useState('');
+  const [manual, setManual] = useState('');
+  const [flash, setFlash] = useState('');
+  const scannerRef = useRef(null);
+  const doneRef = useRef(false);
+  const lastRef = useRef({ code: '', t: 0 });
+
+  const handleCode = useCallback(async (raw) => {
+    const code = (raw || '').trim();
+    if (!code) return;
+    if (mode === 'add') {
+      const now = Date.now();
+      if (lastRef.current.code === code && now - lastRef.current.t < 2500) return; // debounce repeats
+      lastRef.current = { code, t: now };
+      const label = await onAdd(code);
+      setFlash(label);
+      setTimeout(() => setFlash(''), 1800);
+    } else {
+      if (doneRef.current) return;
+      doneRef.current = true;
+      safeStop(scannerRef.current).finally(() => onResult(code));
+    }
+  }, [mode, onAdd, onResult]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const m = await import('html5-qrcode');
+        if (cancelled) return;
+        const scanner = new m.Html5Qrcode('qr-reader', { verbose: false });
+        scannerRef.current = scanner;
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 220, height: 220 } },
+          (text) => { if (!cancelled) handleCode(text); },
+          () => {}
+        );
+        if (cancelled) safeStop(scanner);
+      } catch (e) {
+        if (!cancelled) setErr(e?.message || String(e) || 'Camera could not start.');
+      }
+    })();
+    return () => { cancelled = true; safeStop(scannerRef.current); };
+  }, [handleCode]);
+
+  function submitManual() {
+    const v = manual.trim();
+    if (!v) return;
+    if (mode === 'add') { handleCode(v); setManual(''); }
+    else { safeStop(scannerRef.current).finally(() => onResult(v)); }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>{title || (mode === 'add' ? 'Scan to add' : 'Scan a QR label')}</h2>
+        <div id="qr-reader" />
+        {flash && <p className="flash">{flash}</p>}
+        {err
+          ? <p className="error">Camera couldn&apos;t start on this device: {err}. Use the box below instead.</p>
+          : <p className="hint">{mode === 'add'
+              ? 'Scan each label to add it — keep going, then tap Done.'
+              : 'Point the camera at a label\u2019s QR code — or type the ID below.'}</p>}
+        <Field label="Or enter the Item ID" full>
+          <input value={manual} placeholder="e.g. SUP-0007"
+            onChange={(e) => setManual(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') submitManual(); }} />
+        </Field>
+        <div className="modal-actions">
+          <div className="spacer" />
+          <button className="btn-secondary" onClick={onClose}>{mode === 'add' ? 'Done' : 'Cancel'}</button>
+          <button className="btn-primary" disabled={!manual.trim()} onClick={submitManual}>
+            {mode === 'add' ? 'Add' : 'Go to item'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Home() {
+  const [items, setItems] = useState([]);
+  const [orderList, setOrderList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('items'); // 'items' | 'order'
+  const [search, setSearch] = useState('');
+  const [fCategory, setFCategory] = useState('');
+  const [fManufacturer, setFManufacturer] = useState('');
+  const [fSupplier, setFSupplier] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [fLow, setFLow] = useState(false);
+  const [sortBy, setSortBy] = useState('category');
+  const [editing, setEditing] = useState(null);
+  const [scanning, setScanning] = useState(null); // null | 'open' | 'add'
+  const [uploading, setUploading] = useState(false);
+  const [setImgBusy, setSetImgBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [sets, setSets] = useState([]);
+  const [setRows, setSetRows] = useState([]);
+  const [activeSet, setActiveSet] = useState(null);
+  const [kitSearch, setKitSearch] = useState('');
+  const [showHelp, setShowHelp] = useState(false);
+  const [zoomImg, setZoomImg] = useState(null);
+  const [counting, setCounting] = useState(null);
+  const [lastCount, setLastCount] = useState(null);
+  const [schedules, setSchedules] = useState([]);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [savedOrders, setSavedOrders] = useState([]);
+  const [showSaved, setShowSaved] = useState(false);
+  const [printTarget, setPrintTarget] = useState(null);
+  const [role, setRole] = useState('admin'); // 'admin' | 'viewer' | 'cpa' (real value comes from /api/me)
+  const [setups, setSetups] = useState([]);
+  const [setupOpen, setSetupOpen] = useState(null); // { id, num, edit } | null
+  const isAdmin = role === 'admin';
+  const canSetups = role !== 'cpa';
+
+  const fetchItems = useCallback(async (silent) => {
+    const { data, error } = await supabase.from('items').select('*');
+    if (error) {
+      console.error(error);
+      if (silent !== true) alert('Could not load items: ' + error.message);
+      return; // keep what's on screen if a refresh fails
+    }
+    setItems(data || []);
+  }, []);
+
+  const fetchOrderList = useCallback(async () => {
+    const { data, error } = await supabase.from('order_list').select('*');
+    if (error) { console.error(error); return; }
+    setOrderList(data || []);
+  }, []);
+
+  const fetchSets = useCallback(async () => {
+    const { data } = await supabase.from('sets').select('*').order('name');
+    setSets(data || []);
+  }, []);
+
+  const fetchSetRows = useCallback(async () => {
+    const { data } = await supabase.from('set_items').select('*');
+    setSetRows(data || []);
+  }, []);
+
+  const fetchLastCount = useCallback(async () => {
+    const { data } = await supabase.from('inventory_sessions').select('*')
+      .eq('status', 'complete').order('completed_at', { ascending: false }).limit(1);
+    setLastCount(data && data[0] ? data[0] : null);
+  }, []);
+
+  const fetchSchedules = useCallback(async () => {
+    const { data } = await supabase.from('inventory_sessions').select('*')
+      .eq('status', 'scheduled').order('scheduled_date', { ascending: true });
+    setSchedules(data || []);
+  }, []);
+
+  const fetchSavedOrders = useCallback(async () => {
+    const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(50);
+    setSavedOrders(data || []);
+  }, []);
+
+  const fetchSetups = useCallback(async () => {
+    const { data, error } = await supabase.from('setups').select('*').order('created_at', { ascending: false });
+    if (error) { console.error(error); return; } // table not created yet -> just show none
+    setSetups(data || []);
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/me').then((r) => r.json()).then((d) => { if (d?.role && d.role !== 'none') setRole(d.role); }).catch(() => {});
+  }, []);
+
+  // ---- keep every device current ----
+  // Re-pull everything when the app comes back to the foreground (the iPad home-screen app stays
+  // alive in the background), and every 30s while it's open. Skipped while you're typing, editing
+  // an item or counting, so a refresh never overwrites something half-entered.
+  const [refreshing, setRefreshing] = useState(false);
+  const busyRef = useRef(false);
+  const retryRef = useRef(null);
+  const refreshAllRef = useRef(null);
+  busyRef.current = !!(editing || counting || setupOpen || scanning || showSchedule || showSaved);
+  const refreshAll = useCallback(async (manual) => {
+    if (manual !== true) {
+      const el = typeof document !== 'undefined' ? document.activeElement : null;
+      const typing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+      if (busyRef.current || typing) {
+        // try again shortly instead of dropping the update
+        if (!retryRef.current) retryRef.current = setTimeout(() => { retryRef.current = null; refreshAllRef.current && refreshAllRef.current(); }, 2000);
+        return;
+      }
+    }
+    setRefreshing(true);
+    await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
+    setRefreshing(false);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
+
+  refreshAllRef.current = refreshAll;
+
+  // Live updates from Supabase (needs 03_realtime.sql run once). Any change from any device
+  // triggers a quick refresh here; the focus/30s refresh above is the safety net if it's off.
+  useEffect(() => {
+    let timer = null;
+    const kick = () => { clearTimeout(timer); timer = setTimeout(() => refreshAllRef.current && refreshAllRef.current(), 600); };
+    const ch = supabase.channel('dd-live');
+    ['items', 'order_list', 'sets', 'set_items', 'inventory_sessions', 'orders', 'setups'].forEach((table) => {
+      ch.on('postgres_changes', { event: '*', schema: 'public', table }, kick);
+    });
+    ch.subscribe();
+    return () => { clearTimeout(timer); clearTimeout(retryRef.current); retryRef.current = null; supabase.removeChannel(ch); };
+  }, []);
+
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshAll(); };
+    const onShow = () => refreshAll();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onShow);
+    window.addEventListener('pageshow', onShow);
+    const t = setInterval(() => { if (document.visibilityState === 'visible') refreshAll(); }, 30000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onShow);
+      window.removeEventListener('pageshow', onShow);
+      clearInterval(t);
+    };
+  }, [refreshAll]);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
+      setLoading(false);
+    })();
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
+
+  const itemByCode = useCallback(
+    (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
+    [items]
+  );
+  const onList = useCallback(
+    (itemId) => orderList.some((o) => o.item_id === itemId),
+    [orderList]
+  );
+
+  const uniq = useCallback(
+    (key) => Array.from(new Set(items.map((i) => i[key]).filter(Boolean))).sort(),
+    [items]
+  );
+  const categories = useMemo(() => uniq('category'), [uniq]);
+  const manufacturers = useMemo(() => uniq('manufacturer'), [uniq]);
+  const suppliers = useMemo(() => uniq('supplier'), [uniq]);
+  const lowCount = useMemo(
+    () => items.filter((i) => !i.archived && ['low', 'out'].includes(stockState(i))).length,
+    [items]
+  );
+
+  const visible = useMemo(() => {
+    let list = items.filter((i) => (showArchived ? i.archived : !i.archived));
+    if (fCategory) list = list.filter((i) => i.category === fCategory);
+    if (fManufacturer) list = list.filter((i) => i.manufacturer === fManufacturer);
+    if (fSupplier) list = list.filter((i) => i.supplier === fSupplier);
+    if (fLow) list = list.filter((i) => { const s = stockState(i); return s === 'low' || s === 'out'; });
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(
+        (i) =>
+          (i.name || '').toLowerCase().includes(q) ||
+          (i.sku || '').toLowerCase().includes(q) ||
+          (i.item_id || '').toLowerCase().includes(q)
+      );
+    }
+    const s = sortBy;
+    list = [...list].sort((a, b) => {
+      if (s === 'current_qty') return Number(a.current_qty ?? 0) - Number(b.current_qty ?? 0);
+      if (s === 'updated_at') return new Date(b.updated_at) - new Date(a.updated_at);
+      return String(a[s] || '').localeCompare(String(b[s] || ''));
+    });
+    return list;
+  }, [items, showArchived, fCategory, fManufacturer, fSupplier, fLow, search, sortBy]);
+
+  // order list joined with item details, sorted: unchecked first, then by supplier + name
+  const orderRows = useMemo(() => {
+    return orderList
+      .map((o) => ({ ...o, item: itemByCode(o.item_id) }))
+      .sort((a, b) => {
+        if (a.ordered !== b.ordered) return a.ordered ? 1 : -1;
+        const sa = (a.item?.supplier || '') + (a.item?.name || '');
+        const sb = (b.item?.supplier || '') + (b.item?.name || '');
+        return sa.localeCompare(sb);
+      });
+  }, [orderList, itemByCode]);
+
+  const orderCount = orderList.length;
+  const nextCount = schedules[0] || null;
+
+  const archivedMatches = useMemo(() => {
+    if (!search.trim() || showArchived) return [];
+    const q = search.trim().toLowerCase();
+    let list = items.filter((i) => i.archived);
+    if (fCategory) list = list.filter((i) => i.category === fCategory);
+    if (fManufacturer) list = list.filter((i) => i.manufacturer === fManufacturer);
+    if (fSupplier) list = list.filter((i) => i.supplier === fSupplier);
+    list = list.filter((i) =>
+      (i.name || '').toLowerCase().includes(q) ||
+      (i.sku || '').toLowerCase().includes(q) ||
+      (i.item_id || '').toLowerCase().includes(q));
+    return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [items, search, showArchived, fCategory, fManufacturer, fSupplier]);
+
+  const grouped = useMemo(() => {
+    const g = {};
+    visible.forEach((it) => { const c = it.category || 'Uncategorized'; (g[c] ||= []).push(it); });
+    Object.values(g).forEach((arr) => arr.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+    return Object.entries(g).sort((a, b) => {
+      if (a[0] === 'Uncategorized') return 1;
+      if (b[0] === 'Uncategorized') return -1;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [visible]);
+
+  function nextItemId() {
+    let max = 0;
+    items.forEach((i) => {
+      const m = /^SUP-(\d+)$/.exec(i.item_id || '');
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return 'SUP-' + String(max + 1).padStart(4, '0');
+  }
+
+  // item_id -> [{ setup, num }] for the "Appears in set-ups" list on an item
+  const itemSetups = useMemo(() => {
+    const m = {};
+    setups.forEach((s) => (s.points || []).forEach((p, i) => {
+      if (p.item_id) (m[p.item_id] ||= []).push({ setup: s, num: i + 1 });
+    }));
+    return m;
+  }, [setups]);
+
+  function goToSet(st) { setSetupOpen(null); setView('sets'); setActiveSet(st.id); }
+  function goToItem(item) { setSetupOpen(null); setView('items'); openEdit(item); }
+  function openSetupAt(setupId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setupId, num }); }
+
+  // Ask the database (not this screen's possibly-stale copy) which Item IDs are taken
+  async function freshIds() {
+    const { data } = await supabase.from('items').select('item_id');
+    return new Set((data || []).map((r) => r.item_id));
+  }
+  function nextFreeId(ids) {
+    let max = 0;
+    ids.forEach((id) => { const m = /^SUP-(\d+)$/.exec(id || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return 'SUP-' + String(max + 1).padStart(4, '0');
+  }
+  async function openAdd() {
+    const guess = nextItemId();
+    setEditing({ ...EMPTY, item_id: guess });
+    try {
+      const fresh = nextFreeId(await freshIds());
+      // swap in the up-to-date ID only if the form is still the untouched new item
+      setEditing((e) => (e && !e.id && e.item_id === guess ? { ...e, item_id: fresh } : e));
+    } catch (_) {}
+  }
+  function openEdit(item) {
+    setEditing({ ...EMPTY, ...item, expiration_date: item.expiration_date || '', last_ordered: item.last_ordered || '' });
+  }
+  function closeModal() { setEditing(null); }
+
+  function handleScan(text) {
+    setScanning(null);
+    const found = itemByCode((text || '').trim());
+    if (found) openEdit(found);
+    else alert('No item found for code: ' + text);
+  }
+
+  // ---- order list actions ----
+  async function orderAddByCode(code) {
+    const item = itemByCode(code);
+    if (!item) return 'No item: ' + code;
+    if (onList(item.item_id)) return 'Already on list: ' + item.item_id;
+    const qty = item.reorder_qty ?? 1;
+    const { error } = await supabase.from('order_list').insert({ item_id: item.item_id, qty });
+    if (error) {
+      if (error.code === '23505') return 'Already on list: ' + item.item_id;
+      return 'Error: ' + error.message;
+    }
+    await fetchOrderList();
+    return 'Added ' + item.item_id;
+  }
+
+  async function addItemToOrder(item) {
+    const msg = await orderAddByCode(item.item_id);
+    if (msg.startsWith('Error')) alert(msg);
+  }
+
+  async function toggleOrderForItem(item) {
+    const existing = orderList.find((o) => o.item_id === item.item_id);
+    if (existing) { await removeFromOrder(existing.id); return; }
+    if (item.ordered_at && !confirm(`This item is already marked ON ORDER (since ${fmtDate(item.ordered_at)}). Add it to the order list again?`)) return;
+    await addItemToOrder(item);
+  }
+
+  function patchItemByCode(itemId, patch) {
+    setItems((l) => l.map((i) => (i.item_id === itemId ? { ...i, ...patch } : i)));
+  }
+  async function markOrdered(item) {
+    const stamp = new Date().toISOString();
+    patchItemByCode(item.item_id, { ordered_at: stamp });
+    setEditing((e) => (e && e.item_id === item.item_id ? { ...e, ordered_at: stamp } : e));
+    await supabase.from('items').update({ ordered_at: stamp }).eq('item_id', item.item_id);
+  }
+  async function markReceived(item) {
+    patchItemByCode(item.item_id, { ordered_at: null });
+    setEditing((e) => (e && e.item_id === item.item_id ? { ...e, ordered_at: null } : e));
+    await supabase.from('items').update({ ordered_at: null }).eq('item_id', item.item_id);
+  }
+
+  async function removeFromOrder(entryId) {
+    setOrderList((l) => l.filter((o) => o.id !== entryId));
+    await supabase.from('order_list').delete().eq('id', entryId);
+  }
+
+  async function toggleOrdered(entry) {
+    const newOrdered = !entry.ordered;
+    setOrderList((l) => l.map((o) => (o.id === entry.id ? { ...o, ordered: newOrdered } : o)));
+    await supabase.from('order_list').update({ ordered: newOrdered }).eq('id', entry.id);
+    const stamp = newOrdered ? new Date().toISOString() : null;
+    patchItemByCode(entry.item_id, { ordered_at: stamp });
+    await supabase.from('items').update({ ordered_at: stamp }).eq('item_id', entry.item_id);
+  }
+
+  function changeQty(entryId, val) {
+    setOrderList((l) => l.map((o) => (o.id === entryId ? { ...o, qty: val } : o)));
+  }
+  async function persistQty(entryId, val) {
+    const qty = Math.max(0, parseInt(val || '0', 10) || 0);
+    setOrderList((l) => l.map((o) => (o.id === entryId ? { ...o, qty } : o)));
+    await supabase.from('order_list').update({ qty }).eq('id', entryId);
+  }
+
+  async function clearChecked() {
+    const done = orderList.filter((o) => o.ordered).map((o) => o.id);
+    if (done.length === 0) { alert('Nothing checked off yet.'); return; }
+    if (!confirm(`Remove ${done.length} checked-off item(s) from the list?`)) return;
+    setOrderList((l) => l.filter((o) => !o.ordered));
+    await supabase.from('order_list').delete().in('id', done);
+  }
+
+  function printList() { setPrintTarget({ type: 'live' }); setTimeout(() => window.print(), 60); }
+  function printSaved(order) { setPrintTarget({ type: 'saved', order }); setShowSaved(false); setTimeout(() => window.print(), 120); }
+
+  async function scheduleAdd(date, who) {
+    await supabase.from('inventory_sessions').insert({ status: 'scheduled', scheduled_date: date, assigned_to: who || null, label: 'Scheduled count' });
+    fetchSchedules();
+  }
+  async function scheduleRemove(id) {
+    setSchedules((l) => l.filter((s) => s.id !== id));
+    await supabase.from('inventory_sessions').delete().eq('id', id);
+  }
+
+  async function saveOrder() {
+    if (orderRows.length === 0) { alert('The order list is empty.'); return; }
+    const who = (prompt('Save this order sheet. Who placed the order? (optional)') || '').trim() || null;
+    const lines = orderRows.map((o) => ({
+      item_id: o.item_id, name: o.item?.name || o.item_id, sku: o.item?.sku || '',
+      supplier: o.item?.supplier || '', qty: o.qty,
+    }));
+    const { error } = await supabase.from('orders').insert({ placed_by: who, item_count: lines.length, lines });
+    if (error) { alert('Could not save order: ' + error.message); return; }
+    fetchSavedOrders();
+    alert('Order saved — find it any time under “Saved orders”.');
+  }
+
+  // ---- item image + save ----
+  async function uploadImage(file, itemId) {
+    const out = await compressImage(file);
+    const ext = out.type === 'image/jpeg' ? 'jpg' : (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const path = `${itemId || 'new'}/${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from('item-images').upload(path, out, { upsert: true, contentType: out.type || undefined });
+    if (error) { alert('Image upload failed: ' + error.message); return null; }
+    const { data } = supabase.storage.from('item-images').getPublicUrl(path);
+    return data.publicUrl;
+  }
+  async function onPickImage(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadImage(file, editing.item_id);
+      if (url) setEditing((prev) => ({ ...prev, image_url: url }));
+    } catch (err) { alert('Image upload failed: ' + (err?.message || err)); }
+    finally { setUploading(false); }
+  }
+
+  function patchItemLocal(id, patch) {
+    setItems((list) => list.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  }
+  async function saveQty(item, qty) {
+    const q = Math.max(0, Number.isFinite(qty) ? qty : 0);
+    const now = new Date().toISOString();
+    const patch = { current_qty: q, qty_updated_at: now };
+    if (item.ordered_at && item.par_level != null && q > Number(item.par_level)) patch.ordered_at = null;
+    patchItemLocal(item.id, patch);
+    const { error } = await supabase.from('items').update(patch).eq('id', item.id);
+    if (error) { alert('Could not update qty: ' + error.message); fetchItems(); }
+  }
+  function bumpQty(item, delta) {
+    saveQty(item, Number(item.current_qty ?? 0) + delta);
+  }
+
+  async function startCount() {
+    const ids = visible.map((i) => i.id);
+    if (ids.length === 0) { alert('No items in the current view to count.'); return; }
+    const assignee = (prompt('Who is doing this count? (optional)') || '').trim() || null;
+    const { data, error } = await supabase.from('inventory_sessions')
+      .insert({ status: 'in_progress', started_at: new Date().toISOString(), assigned_to: assignee, label: 'Count ' + new Date().toLocaleDateString() })
+      .select().single();
+    if (error) { alert('Could not start count: ' + error.message); return; }
+    setCounting({ sessionId: data.id, ids, idx: 0, counted: 0 });
+  }
+  function countCurrent() { return counting ? items.find((i) => i.id === counting.ids[counting.idx]) : null; }
+  async function countSave(newQty) {
+    const it = countCurrent();
+    if (it) await saveQty(it, newQty);
+    setCounting((c) => ({ ...c, idx: c.idx + 1, counted: c.counted + 1 }));
+  }
+  function countSkip() { setCounting((c) => ({ ...c, idx: c.idx + 1 })); }
+  function countBack() { setCounting((c) => ({ ...c, idx: Math.max(0, c.idx - 1) })); }
+  async function countArchive() {
+    const it = countCurrent();
+    if (!it) return;
+    if (!confirm(`Archive "${it.name}"? It'll be hidden from the active list (not deleted).`)) return;
+    patchItemLocal(it.id, { archived: true });
+    await supabase.from('items').update({ archived: true }).eq('id', it.id);
+    setCounting((c) => ({ ...c, idx: c.idx + 1 }));
+  }
+  async function countFinish() {
+    const c = counting;
+    if (c) await supabase.from('inventory_sessions').update({ status: 'complete', completed_at: new Date().toISOString(), counted: c.counted }).eq('id', c.sessionId);
+    setCounting(null);
+    fetchLastCount();
+  }
+  async function countCancel() {
+    if (!confirm("Stop this count? Any counts you already entered are saved, but this session won't be logged as complete.")) return;
+    if (counting) await supabase.from('inventory_sessions').delete().eq('id', counting.sessionId);
+    setCounting(null);
+  }
+
+  const num = (v) => (v === '' || v == null ? null : Number(v));
+  const txt = (v) => (v === '' || v == null ? null : v);
+
+  async function saveItem() {
+    if (!editing.item_id.trim() || !editing.name.trim()) { alert('Item ID and Name are required.'); return; }
+    setSaving(true);
+    let useId = editing.item_id.trim();
+    let renumbered = false;
+    if (!editing.id) {
+      try {
+        const ids = await freshIds();
+        if (ids.has(useId)) {
+          if (/^SUP-\d+$/.test(useId)) { useId = nextFreeId(ids); renumbered = true; }
+          else { setSaving(false); alert(`Item ID "${useId}" is already used by another item. Please change it.`); return; }
+        }
+      } catch (_) {}
+    }
+    const payload = {
+      item_id: useId, name: editing.name.trim(),
+      category: txt(editing.category), sku: txt(editing.sku),
+      manufacturer: txt(editing.manufacturer), supplier: txt(editing.supplier),
+      storage_location: txt(editing.storage_location),
+      current_qty: num(editing.current_qty) ?? 0, par_level: num(editing.par_level),
+      reorder_qty: num(editing.reorder_qty), expiration_date: txt(editing.expiration_date),
+      order_link: txt(editing.order_link), unit_price: num(editing.unit_price),
+      last_ordered: txt(editing.last_ordered), notes: txt(editing.notes), image_url: txt(editing.image_url),
+    };
+    let error;
+    if (editing.id) ({ error } = await supabase.from('items').update(payload).eq('id', editing.id));
+    else ({ error } = await supabase.from('items').insert(payload));
+    setSaving(false);
+    if (error) {
+      if (error.code === '23505') alert('That Item ID is already used by another item. Please change the Item ID and save again.');
+      else alert('Save failed: ' + error.message);
+      return;
+    }
+    closeModal();
+    fetchItems();
+    if (renumbered) alert(`That ID had just been taken, so this item was saved as ${useId}.`);
+  }
+
+  async function archiveItem(item, archived) {
+    const { error } = await supabase.from('items').update({ archived }).eq('id', item.id);
+    if (error) { alert(error.message); return; }
+    closeModal(); fetchItems();
+  }
+  async function deleteItem(item) {
+    if (!confirm(`Permanently delete ${item.item_id} — ${item.name}?\nThis cannot be undone. (Consider Archive instead.)`)) return;
+    const { error } = await supabase.from('items').delete().eq('id', item.id);
+    if (error) { alert(error.message); return; }
+    closeModal(); fetchItems(); fetchOrderList();
+  }
+  async function logout() { await fetch('/api/logout', { method: 'POST' }); window.location.href = '/login'; }
+
+  const itemSetNames = useMemo(() => {
+    const nameById = Object.fromEntries(sets.map((s) => [s.id, s.name]));
+    const m = {};
+    setRows.forEach((si) => { (m[si.item_id] ||= []).push(nameById[si.set_id]); });
+    return m;
+  }, [sets, setRows]);
+  function countInSet(setId) { return setRows.filter((si) => si.set_id === setId).length; }
+
+  async function createSetPrompt() {
+    const name = prompt('Name this set (e.g. "Crown Bur Set")');
+    if (!name || !name.trim()) return;
+    const { data, error } = await supabase.from('sets').insert({ name: name.trim() }).select().single();
+    if (error) { alert(error.message); return; }
+    await fetchSets();
+    if (data) setActiveSet(data.id);
+  }
+  async function renameSetPrompt(s) {
+    const name = prompt('Rename set', s.name);
+    if (!name || !name.trim()) return;
+    await supabase.from('sets').update({ name: name.trim() }).eq('id', s.id);
+    fetchSets();
+  }
+  async function deleteSetConfirm(s) {
+    if (!confirm(`Delete the set "${s.name}"?\nThe items themselves are NOT deleted — only the grouping.`)) return;
+    await supabase.from('sets').delete().eq('id', s.id);
+    setActiveSet(null); fetchSets(); fetchSetRows();
+  }
+  async function saveSetImage(st, url) {
+    const { error } = await supabase.from('sets').update({ image_url: url }).eq('id', st.id);
+    if (error) { alert('Could not save the set photo: ' + error.message + '\n(Has 04_set_photos.sql been run in Supabase?)'); return; }
+    setSets((l) => l.map((x) => (x.id === st.id ? { ...x, image_url: url } : x)));
+  }
+  async function onPickSetImage(e, st) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setSetImgBusy(true);
+    try {
+      const out = await compressImage(file, 1400, 0.82);
+      const ext = out.type === 'image/jpeg' ? 'jpg' : (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `sets/${st.id}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from('item-images').upload(path, out, { upsert: true, contentType: out.type || undefined });
+      if (error) throw new Error(error.message);
+      await saveSetImage(st, supabase.storage.from('item-images').getPublicUrl(path).data.publicUrl);
+    } catch (err) { alert('Photo upload failed: ' + (err?.message || err)); }
+    setSetImgBusy(false);
+  }
+  async function addItemToSet(setId, item) {
+    const { error } = await supabase.from('set_items').insert({ set_id: setId, item_id: item.item_id });
+    if (error && error.code !== '23505') { alert(error.message); return; }
+    fetchSetRows();
+  }
+  async function removeItemFromSet(setId, itemId) {
+    setSetRows((l) => l.filter((si) => !(si.set_id === setId && si.item_id === itemId)));
+    await supabase.from('set_items').delete().eq('set_id', setId).eq('item_id', itemId);
+  }
+  async function setAddByCode(code) {
+    const item = itemByCode(code);
+    if (!item) return 'No item: ' + code;
+    if (setRows.some((si) => si.set_id === activeSet && si.item_id === item.item_id)) return 'Already in set: ' + item.item_id;
+    const { error } = await supabase.from('set_items').insert({ set_id: activeSet, item_id: item.item_id });
+    if (error && error.code !== '23505') return 'Error: ' + error.message;
+    await fetchSetRows();
+    return 'Added ' + item.item_id;
+  }
+
+  function itemRow(item, opts = {}) {
+    const st = stockState(item);
+    const otherSets = opts.setId ? (itemSetNames[item.item_id] || []).filter((nm) => nm !== opts.setName).length : 0;
+    return (
+      <div className={'item-row' + (st === 'out' ? ' out' : st === 'low' ? ' low' : '')} key={item.id} onClick={() => openEdit(item)}>
+        <div className="row-thumb">
+          {item.image_url ? <img src={item.image_url} alt={item.name} /> : <span className="ph">▢</span>}
+        </div>
+        <div className="row-main">
+          <div className="row-name">{item.name}</div>
+          <div className="row-sub">
+            <span className="idpill">{item.item_id}</span>
+            {item.category && <span className="chip" style={catStyle(item.category)}>{item.category}</span>}
+            {otherSets > 0 && <span className="chip setchip">in {otherSets} other set{otherSets === 1 ? '' : 's'}</span>}
+            {item.ordered_at && <span className="chip onorder">on order · {fmtDate(item.ordered_at)}</span>}
+            {item.supplier && <span className="row-supplier">{item.supplier}</span>}
+            {item.qty_updated_at && <span className="row-updated">counted {fmtDate(item.qty_updated_at)}</span>}
+          </div>
+        </div>
+        <div className="row-right">
+          <div className="qty-stepper" onClick={(e) => e.stopPropagation()}>
+            <button className="qty-btn" onClick={() => bumpQty(item, -1)} aria-label="decrease">−</button>
+            <input className="qty-input" type="number" min="0" value={item.current_qty ?? 0}
+              onChange={(e) => patchItemLocal(item.id, { current_qty: e.target.value })}
+              onBlur={(e) => saveQty(item, parseInt(e.target.value || '0', 10))} />
+            <button className="qty-btn" onClick={() => bumpQty(item, 1)} aria-label="increase">+</button>
+          </div>
+          <div className="row-meta-line">
+            {item.par_level != null && Number(item.par_level) > 0 && <span className="par-note">par {item.par_level}</span>}
+            <StatusBadge item={item} />
+          </div>
+        </div>
+        <button className={onList(item.item_id) ? 'row-add on' : 'row-add'}
+          title={onList(item.item_id) ? 'On order list — tap to remove' : 'Add to order list'}
+          onClick={(e) => { e.stopPropagation(); toggleOrderForItem(item); }}>{onList(item.item_id) ? '✓' : '+'}</button>
+        {opts.setId && (
+          <button className="row-remove" title="Remove from this set"
+            onClick={(e) => { e.stopPropagation(); removeItemFromSet(opts.setId, item.item_id); }}>✕</button>
+        )}
+      </div>
+    );
+  }
+
+  const today = new Date().toLocaleDateString();
+
+  return (
+    <div className="app">
+      <header className="appheader">
+        <div className="appheader-top">
+          <img src="/deccan-logo.png" alt="Deccan Dental" className="logo" />
+          <div className="hsearch">
+            <select className="hsearch-cat" value={fCategory}
+              onChange={(e) => { setFCategory(e.target.value); if (view !== 'items') setView('items'); }}>
+              <option value="">All categories</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input className="hsearch-input" placeholder="Search items, SKU, or ID"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); if (e.target.value && view !== 'items') setView('items'); }} />
+            <button className="hsearch-btn" aria-label="Search" onClick={() => setView('items')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><line x1="16.5" y1="16.5" x2="21" y2="21" /></svg>
+            </button>
+          </div>
+          <div className="top-actions">
+            <button className="btn-scan" onClick={() => setScanning(view === 'order' ? 'order' : (view === 'sets' && activeSet) ? 'set' : 'open')}>Scan</button>
+            <button className="btn-primary" onClick={openAdd}>+ Add</button>
+            <button className="cart-btn" aria-label="Order list" onClick={() => { setView('order'); setActiveSet(null); }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M2 3h3l2.4 12h11l2-8H6" /></svg>
+              {orderCount > 0 && <span className="cart-count">{orderCount}</span>}
+            </button>
+            <button className="btn-ghost" onClick={() => refreshAll(true)} disabled={refreshing} title="Refresh now">{refreshing ? '…' : '↻'}</button>
+            <button className="btn-ghost" onClick={() => setShowHelp(true)}>Help</button>
+            <button className="btn-ghost" onClick={logout}>Log out</button>
+          </div>
+        </div>
+      </header>
+
+      <div className="navbar">
+        <button className={view === 'items' ? 'navtab on' : 'navtab'} onClick={() => setView('items')}>Items</button>
+        <button className={view === 'order' ? 'navtab on' : 'navtab'} onClick={() => { setView('order'); setActiveSet(null); }}>
+          Order list{orderCount ? ` (${orderCount})` : ''}
+        </button>
+        <button className={view === 'sets' ? 'navtab on' : 'navtab'} onClick={() => { setView('sets'); setActiveSet(null); }}>
+          Sets{sets.length ? ` (${sets.length})` : ''}
+        </button>
+        {canSetups && (
+          <button className={view === 'setups' ? 'navtab on' : 'navtab'} onClick={() => { setView('setups'); setActiveSet(null); }}>
+            📸 Set-ups{setups.length ? ` (${setups.length})` : ''}
+          </button>
+        )}
+        <div className="navbar-spacer" />
+        {lowCount > 0 && (
+          <button className={fLow ? 'navlow on' : 'navlow'} onClick={() => { setView('items'); setFLow((v) => !v); }}>
+            ⚠ {lowCount} low / out
+          </button>
+        )}
+      </div>
+
+      {view === 'items' && (
+        <>
+          <div className="filterbar">
+            <select value={fManufacturer} onChange={(e) => setFManufacturer(e.target.value)}>
+              <option value="">All manufacturers</option>
+              {manufacturers.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={fSupplier} onChange={(e) => setFSupplier(e.target.value)}>
+              <option value="">All suppliers</option>
+              {suppliers.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+              <option value="item_id">Sort: Item ID</option>
+              <option value="name">Sort: Name</option>
+              <option value="category">Group by category</option>
+              <option value="manufacturer">Sort: Manufacturer</option>
+              <option value="supplier">Sort: Supplier</option>
+              <option value="current_qty">Sort: Quantity (low first)</option>
+              <option value="updated_at">Sort: Recently updated</option>
+            </select>
+            <label className="chk">
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Archived
+            </label>
+          </div>
+
+          <div className="statusbar">
+            <div className="statusbar-main">
+              <span className="statusbar-label">Inventory</span>
+              {(() => {
+                const t = new Date().toISOString().slice(0, 10);
+                if (!nextCount) return <span className="statuspill none">None scheduled</span>;
+                const s = nextCount.scheduled_date;
+                const st = s > t ? { l: 'Scheduled', c: 'sched' } : s === t ? { l: 'Due today', c: 'due' } : { l: 'Past due', c: 'past' };
+                return (
+                  <>
+                    <span className={'statuspill ' + st.c}>{st.l}</span>
+                    <span className="statusbar-date">{fmtDate(s)}{nextCount.assigned_to ? ' · ' + nextCount.assigned_to : ''}</span>
+                  </>
+                );
+              })()}
+              {lastCount && <span className="statusbar-last">Last done {fmtDate(lastCount.completed_at)}</span>}
+            </div>
+            <div className="statusbar-actions">
+              <button className="btn-secondary" onClick={() => setShowSchedule(true)}>Schedule</button>
+              <button className="btn-scan" onClick={startCount} title="Steps through the items currently shown, one at a time">Start count</button>
+            </div>
+          </div>
+
+          <div className="count">
+            {loading ? 'Loading…' : `${visible.length} item${visible.length === 1 ? '' : 's'}`}
+          </div>
+
+          {visible.length > 0 && (
+            <div className="list-head">
+              <span className="lh-item">Item</span>
+              <span className="lh-spacer" />
+              <span className="lh-stock">In stock</span>
+              <span className="lh-addspace" />
+            </div>
+          )}
+
+          {sortBy === 'category' ? (
+            grouped.map(([cat, its]) => (
+              <div className="cat-group" key={cat}>
+                <div className="cat-header" style={cat === 'Uncategorized' ? undefined : catStyle(cat)}>
+                  {cat} <span className="cat-count">{its.length}</span>
+                </div>
+                <div className="item-list">{its.map((item) => itemRow(item))}</div>
+              </div>
+            ))
+          ) : (
+            <div className="item-list">
+              {visible.map((item) => itemRow(item))}
+            </div>
+          )}
+
+          {archivedMatches.length > 0 && (
+            <div className="archived-section">
+              <div className="archived-head">Archived · {archivedMatches.length} match{archivedMatches.length === 1 ? '' : 'es'}</div>
+              <div className="item-list archived-list">{archivedMatches.map((item) => itemRow(item))}</div>
+            </div>
+          )}
+        </>
+      )}
+
+      {view === 'order' && (
+        <>
+          <div className="order-toolbar">
+            <div className="count">{orderCount} on the list</div>
+            <div className="spacer" />
+            <button className="btn-ghost" onClick={() => setShowSaved(true)}>Saved orders</button>
+            <button className="btn-secondary" onClick={clearChecked}>Clear checked</button>
+            <button className="btn-secondary" onClick={saveOrder}>Save order</button>
+            <button className="btn-primary" onClick={printList}>Print</button>
+          </div>
+
+          {orderRows.length === 0 ? (
+            <div className="empty">Nothing here yet. Tap <b>Scan to add</b>, or open any item and choose <b>Add to order list</b>.</div>
+          ) : (
+            <div className="order-rows">
+              {orderRows.map((o) => (
+                <div className={o.ordered ? 'order-row done' : 'order-row'} key={o.id}>
+                  <input className="order-check" type="checkbox" checked={o.ordered}
+                    onChange={() => toggleOrdered(o)} onClick={(e) => e.stopPropagation()} />
+                  <div className="order-main" onClick={() => o.item && openEdit(o.item)}>
+                    <div className="order-name">{o.item ? o.item.name : o.item_id}</div>
+                    <div className="order-sub">{o.item_id}{o.item?.supplier ? ' · ' + o.item.supplier : ''}</div>
+                  </div>
+                  <input className="order-qty" type="number" min="0" value={o.qty ?? ''}
+                    onChange={(e) => changeQty(o.id, e.target.value)}
+                    onBlur={(e) => persistQty(o.id, e.target.value)}
+                    onClick={(e) => e.stopPropagation()} title="Quantity to order" />
+                  <button className="order-x" title="Remove" onClick={() => removeFromOrder(o.id)}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {view === 'setups' && canSetups && (
+        <SetupsView setups={setups} items={items} itemByCode={itemByCode} sets={sets} setRows={setRows} isAdmin={isAdmin}
+          open={setupOpen} setOpen={setSetupOpen} onChanged={fetchSetups} onGoToItem={goToItem} onGoToSet={goToSet} />
+      )}
+
+      {view === 'sets' && !activeSet && (
+        <>
+          <div className="order-toolbar">
+            <div className="count">{sets.length} set{sets.length === 1 ? '' : 's'}</div>
+            <div className="spacer" />
+            <button className="btn-primary" onClick={createSetPrompt}>+ New set</button>
+          </div>
+          {sets.length === 0 ? (
+            <div className="empty">No sets yet. Create one (e.g. <b>Crown Bur Set</b>), then add items by search or scan.</div>
+          ) : (
+            <div className="set-list">
+              {sets.map((s) => (
+                <div className="set-row" key={s.id} onClick={() => setActiveSet(s.id)}>
+                  <div className="row-thumb sm">{s.image_url ? <img src={s.image_url} alt="" /> : <span className="ph">▢</span>}</div>
+                  <div className="set-name">{s.name}</div>
+                  <div className="set-count">{countInSet(s.id)} item{countInSet(s.id) === 1 ? '' : 's'} ›</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {view === 'sets' && activeSet && (() => {
+        const s = sets.find((x) => x.id === activeSet);
+        if (!s) return null;
+        const memberIds = setRows.filter((si) => si.set_id === activeSet).map((si) => si.item_id);
+        const members = memberIds.map((id) => itemByCode(id)).filter(Boolean)
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        const query = kitSearch.trim().toLowerCase();
+        const results = query
+          ? items.filter((i) => !i.archived && (
+              (i.name || '').toLowerCase().includes(query) ||
+              (i.sku || '').toLowerCase().includes(query) ||
+              (i.item_id || '').toLowerCase().includes(query))).slice(0, 12)
+          : [];
+        return (
+          <>
+            <div className="order-toolbar">
+              <button className="btn-secondary" onClick={() => { setActiveSet(null); setKitSearch(''); }}>← Sets</button>
+              <div className="set-title">{s.name}</div>
+              <div className="spacer" />
+              <button className="btn-ghost" onClick={() => renameSetPrompt(s)}>Rename</button>
+              <button className="btn-danger" onClick={() => deleteSetConfirm(s)}>Delete set</button>
+            </div>
+
+            <div className="set-photo-row">
+              {s.image_url
+                ? <img src={s.image_url} alt={s.name} className="set-photo" onClick={() => setZoomImg(s.image_url)} />
+                : <div className="noimg big set-nophoto">No photo</div>}
+              <div className="img-edit-actions">
+                <label className="btn-secondary file-btn">
+                  {setImgBusy ? 'Uploading…' : (s.image_url ? 'Change photo' : 'Add photo')}
+                  <input type="file" accept="image/*" hidden disabled={setImgBusy} onChange={(e) => onPickSetImage(e, s)} />
+                </label>
+                {s.image_url && <button type="button" className="btn-ghost" onClick={() => saveSetImage(s, null)}>Remove photo</button>}
+              </div>
+            </div>
+
+            <div className="controls">
+              <input className="search" placeholder="Search items to add…" value={kitSearch}
+                onChange={(e) => setKitSearch(e.target.value)} />
+              <button className="btn-scan" onClick={() => setScanning('set')}>Scan to add</button>
+            </div>
+
+            {query && (
+              <div className="add-results">
+                {results.length === 0 ? <div className="add-none">No matches.</div> : results.map((it) => {
+                  const inSet = memberIds.includes(it.item_id);
+                  return (
+                    <div className="add-row" key={it.id}>
+                      <div className="add-info"><span className="idpill">{it.item_id}</span> {it.name}</div>
+                      <button className={inSet ? 'row-add on' : 'row-add'}
+                        onClick={() => inSet ? removeItemFromSet(activeSet, it.item_id) : addItemToSet(activeSet, it)}>
+                        {inSet ? '✓' : '+'}</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="count">{members.length} item{members.length === 1 ? '' : 's'} in this set</div>
+            {members.length === 0 ? (
+              <div className="empty">Empty set. Search above or tap <b>Scan to add</b> to put items in <b>{s.name}</b>.</div>
+            ) : (
+              <div className="item-list">
+                {members.map((item) => itemRow(item, { setId: activeSet, setName: s.name }))}
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {editing && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>{editing.id ? 'Edit item' : 'Add item'}</h2>
+            <div className="form">
+              <div className="img-edit">
+                {editing.image_url ? <img src={editing.image_url} alt="" className="zoomable" onClick={() => setZoomImg(editing.image_url)} /> : <div className="noimg big">No photo</div>}
+                <div className="img-edit-actions">
+                  <label className="btn-secondary file-btn">
+                    {uploading ? 'Uploading…' : (editing.image_url ? 'Change photo' : 'Add photo')}
+                    <input type="file" accept="image/*" capture="environment" onChange={onPickImage} hidden />
+                  </label>
+                  {editing.image_url && (
+                    <button type="button" className="btn-ghost"
+                      onClick={() => setEditing({ ...editing, image_url: null })}>Remove photo</button>
+                  )}
+                </div>
+              </div>
+
+              {editing.id && (
+                <div className="onorder-row">
+                  {editing.ordered_at ? (
+                    <>
+                      <span className="chip onorder">ON ORDER · {fmtDate(editing.ordered_at)}</span>
+                      <button type="button" className="btn-secondary" onClick={() => markReceived(editing)}>Mark received</button>
+                    </>
+                  ) : (
+                    <button type="button" className="btn-ghost" onClick={() => markOrdered(editing)}>Mark as ordered</button>
+                  )}
+                </div>
+              )}
+
+              {editing.id && canSetups && (itemSetups[editing.item_id] || []).length > 0 && (
+                <div className="field full">
+                  <span>Appears in set-ups</span>
+                  <div className="setup-appears">
+                    {itemSetups[editing.item_id].map(({ setup, num }) => (
+                      <button type="button" key={setup.id + num} className="btn-secondary sm" onClick={() => openSetupAt(setup.id, num)}>
+                        📸 {setup.title} · #{num}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <Field label="Item ID *"><input value={editing.item_id} onChange={(e) => setEditing({ ...editing, item_id: e.target.value })} /></Field>
+              <Field label="Name *"><input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
+              <Field label="Category">
+                <PickOrNew key={(editing.id || 'new') + '-cat'} noun="category" value={editing.category || ''}
+                  options={categories} onChange={(v) => setEditing({ ...editing, category: v })} />
+              </Field>
+              <Field label="SKU / Item #"><input value={editing.sku || ''} onChange={(e) => setEditing({ ...editing, sku: e.target.value })} /></Field>
+              <Field label="Manufacturer">
+                <PickOrNew key={(editing.id || 'new') + '-man'} noun="manufacturer" value={editing.manufacturer || ''}
+                  options={manufacturers} onChange={(v) => setEditing({ ...editing, manufacturer: v })} />
+              </Field>
+              <Field label="Supplier">
+                <PickOrNew key={(editing.id || 'new') + '-sup'} noun="supplier" value={editing.supplier || ''}
+                  options={suppliers} onChange={(v) => setEditing({ ...editing, supplier: v })} />
+              </Field>
+              <Field label="Storage location"><input value={editing.storage_location || ''} onChange={(e) => setEditing({ ...editing, storage_location: e.target.value })} /></Field>
+              <Field label="Current qty"><input type="number" value={editing.current_qty ?? ''} onChange={(e) => setEditing({ ...editing, current_qty: e.target.value })} /></Field>
+              <Field label="Par level"><input type="number" value={editing.par_level ?? ''} onChange={(e) => setEditing({ ...editing, par_level: e.target.value })} /></Field>
+              <Field label="Reorder qty"><input type="number" value={editing.reorder_qty ?? ''} onChange={(e) => setEditing({ ...editing, reorder_qty: e.target.value })} /></Field>
+              <Field label="Expiration date"><input type="date" value={editing.expiration_date || ''} onChange={(e) => setEditing({ ...editing, expiration_date: e.target.value })} /></Field>
+              <Field label="Last ordered"><input type="date" value={editing.last_ordered || ''} onChange={(e) => setEditing({ ...editing, last_ordered: e.target.value })} /></Field>
+              <Field label="Unit price"><input type="number" step="0.01" value={editing.unit_price ?? ''} onChange={(e) => setEditing({ ...editing, unit_price: e.target.value })} /></Field>
+              <Field label="Order link" full><input value={editing.order_link || ''} onChange={(e) => setEditing({ ...editing, order_link: e.target.value })} /></Field>
+              <Field label="Notes" full><textarea value={editing.notes || ''} onChange={(e) => setEditing({ ...editing, notes: e.target.value })} /></Field>
+            </div>
+
+            <div className="modal-actions">
+              {editing.id && (onList(editing.item_id)
+                ? <button className="btn-secondary" onClick={() => { const o = orderList.find((x) => x.item_id === editing.item_id); if (o) removeFromOrder(o.id); }}>On order list ✓ — remove</button>
+                : <button className="btn-primary" onClick={() => addItemToOrder(editing)}>+ Add to order list</button>)}
+              <div className="spacer" />
+              {editing.id && !editing.archived && <button className="btn-ghost" onClick={() => archiveItem(editing, true)}>Archive</button>}
+              {editing.id && editing.archived && <button className="btn-ghost" onClick={() => archiveItem(editing, false)}>Unarchive</button>}
+              {editing.id && <button className="btn-danger" onClick={() => deleteItem(editing)}>Delete</button>}
+              <button className="btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn-primary" onClick={saveItem} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHelp && (
+        <div className="modal-backdrop" onClick={() => setShowHelp(false)}>
+          <div className="modal help-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="help-head">
+              <h2>How to use · FAQs</h2>
+              <button className="btn-secondary" onClick={() => setShowHelp(false)}>Close</button>
+            </div>
+            <div className="help-body">
+              <h3>The basics</h3>
+              <p>The <b>Items</b> tab lists every supply. Search by name, SKU, or ID; narrow the list with the <b>Category / Manufacturer / Supplier</b> dropdowns; reorder it with <b>Sort</b>. Tap any item to see its photo and full details or to edit it.</p>
+              <p>A coloured left edge and a <b>LOW</b> / <b>OUT</b> badge mean the stock is at or below that item&apos;s par level. Tap the red <b>&ldquo;N low / out&rdquo;</b> count at the top to show only those items.</p>
+
+              <h3>Updating stock (the monthly count)</h3>
+              <p>On each row use the <b>−</b> and <b>+</b> buttons to adjust the on-hand number, or tap the number and type it. It saves instantly, and the LOW/OUT flag updates as you go.</p>
+
+              <h3>Building an order</h3>
+              <p>Tap the round <b>+</b> on any item row to drop it onto the <b>Order list</b> (it turns into a green <b>✓</b>). Or open the Order list tab and use <b>Scan to add</b> to scan labels in quickly.</p>
+              <p>On the Order list: tick each checkbox as you place the order, adjust the <b>Qty</b>, remove with <b>✕</b>, and <b>Print</b> for a paper order sheet. <b>Clear checked</b> removes the ones you&apos;ve already ordered.</p>
+
+              <h3>Scanning</h3>
+              <p><b>Scan QR</b> on the Items tab opens the scanned item. On the Order list or inside a Set, <b>Scan to add</b> drops scanned items straight in. The camera asks permission the first time — tap <b>Allow</b>. If it won&apos;t start, you can always type the Item ID in the box instead.</p>
+
+              <h3>Sets (kits)</h3>
+              <p>The <b>Sets</b> tab groups items into kits (e.g. &ldquo;Crown Bur Set&rdquo;). Open a set, then <b>search</b> or <b>Scan to add</b> to put items in, and <b>✕</b> to take them out. An item can live in several sets — its stock and details are shared, so a change anywhere updates it everywhere. A row shows <b>&ldquo;in N other sets&rdquo;</b> when it&apos;s shared.</p>
+
+              <h3>Set-ups (photos with numbered dots)</h3>
+              <p>The <b>📸 Set-ups</b> tab holds photos of trays, operatories and cabinets with numbered dots on them. Tap a set-up to see its photo and index. Tick <b>Show numbers on photo</b> to show or hide the dots. Each numbered line can be linked to an inventory item: it shows the live count and LOW/OUT status, and <b>Open item ›</b> jumps to that item. Open any item to see which set-ups it appears in.</p>
+              <p>Admins: <b>+ Add set-up</b>, then <b>Edit</b> — tap the photo to drop a dot, drag dots to move them, type what each is, <b>Link item</b> to tie it to inventory, and use ↑ ↓ to reorder (numbers follow).</p>
+
+              <p><b>Set photos:</b> open a set and tap <b>Add photo</b> to attach a picture of the kit. In a set-up, a numbered line can be linked to a <b>set</b> as well as an item — it then shows the set&apos;s photo, how many items it holds, and the live count of each (tap <b>Show items &amp; counts</b>).</p>
+
+              <h3>Adding &amp; editing items</h3>
+              <p><b>+ Add item</b> creates a new one. Category, Manufacturer, and Supplier are dropdowns — pick an existing value, or choose <b>➕ New…</b> to create one. <b>Add / change photo</b> uses the camera (photos are shrunk automatically, so they load fast and barely use storage).</p>
+              <p><b>Par level</b> is the reorder threshold that drives the LOW/OUT flags. <b>Archive</b> hides an item but keeps it (tick <b>Archived</b> to view, then <b>Unarchive</b>); <b>Delete</b> is permanent — use Archive unless it was a mistake.</p>
+
+              <h3>FAQs</h3>
+              <div className="faq"><b>An item isn&apos;t flagged LOW even though it&apos;s low.</b><p>It needs a <b>Par level</b>. Open the item and set one — that&apos;s the number the on-hand count is compared against.</p></div>
+              <div className="faq"><b>Archive vs Delete?</b><p>Archive hides the item but keeps its record; Delete removes it for good. Prefer Archive.</p></div>
+              <div className="faq"><b>Can one item be in two sets?</b><p>Yes. It&apos;s the same item, so its stock and details stay in sync across every set and the main list.</p></div>
+              <div className="faq"><b>How do I add a brand-new category or supplier?</b><p>In the item, open the dropdown and choose <b>➕ New…</b>, then type it.</p></div>
+              <div className="faq"><b>What do the QR labels do?</b><p>Each label is that item&apos;s ID. Scanning it opens the item — or adds it, on the Order list or in a Set.</p></div>
+              <div className="faq"><b>The camera won&apos;t scan.</b><p>Make sure you allowed camera access and you&apos;re on the app&apos;s https link. The type-the-ID box always works as a backup.</p></div>
+              <div className="faq"><b>Do photos use a lot of space?</b><p>No — every photo is compressed automatically on upload, so you can add one per item without worry.</p></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {counting && (() => {
+        const it = countCurrent();
+        const total = counting.ids.length;
+        const done = counting.idx >= total;
+        const pct = total ? Math.round((Math.min(counting.idx, total) / total) * 100) : 0;
+        return (
+          <div className="count-overlay">
+            <div className="count-top">
+              <div className="count-progress">{done ? total : counting.idx + 1} / {total}</div>
+              <div className="count-bar"><div className="count-bar-fill" style={{ width: pct + '%' }} /></div>
+              <button className="count-x" onClick={countCancel} aria-label="Stop count">✕</button>
+            </div>
+            {done ? (
+              <div className="count-done">
+                <div className="count-done-check">✓</div>
+                <h2>Count complete</h2>
+                <p>You counted {counting.counted} of {total} item{total === 1 ? '' : 's'}.</p>
+                <button className="btn-primary" onClick={countFinish}>Finish &amp; log it</button>
+              </div>
+            ) : it ? (
+              <div className="count-card">
+                <div className="count-photo">
+                  {it.image_url ? <img src={it.image_url} alt="" onClick={() => setZoomImg(it.image_url)} /> : <div className="noimg big">No photo</div>}
+                </div>
+                <div className="count-name">{it.name}</div>
+                <div className="count-meta"><span className="idpill">{it.item_id}</span>{it.category ? ' · ' + it.category : ''}{it.par_level != null ? ' · par ' + it.par_level : ''}</div>
+                <div className="count-current">On record: <b>{it.current_qty ?? 0}</b>{it.qty_updated_at ? ` · last counted ${fmtDate(it.qty_updated_at)}` : ''}</div>
+                <CountInput key={it.id} initial={it.current_qty ?? 0} onSave={countSave} />
+                <div className="count-actions">
+                  <button className="btn-secondary" onClick={countBack} disabled={counting.idx === 0}>← Back</button>
+                  <button className="btn-ghost" onClick={countSkip}>Skip →</button>
+                  <button className="btn-ghost count-archive" onClick={countArchive}>Archive</button>
+                </div>
+                <button className="count-finish" onClick={() => { if (confirm('Finish and log this count now?')) countFinish(); }}>Finish count early</button>
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
+
+      {zoomImg && (
+        <div className="lightbox" onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" />
+          <button className="lightbox-close" onClick={() => setZoomImg(null)} aria-label="Close">✕</button>
+        </div>
+      )}
+
+      {scanning && (
+        <QRScanner
+          mode={scanning === 'open' ? 'open' : 'add'}
+          title={scanning === 'order' ? 'Scan to add to order list'
+            : scanning === 'set' ? 'Scan to add to this set'
+            : 'Scan a QR label'}
+          onResult={handleScan}
+          onAdd={scanning === 'set' ? setAddByCode : orderAddByCode}
+          onClose={() => setScanning(null)} />
+      )}
+
+      {/* Print-only order sheet */}
+      {showSchedule && (
+        <ScheduleModal
+          schedules={schedules}
+          onAdd={scheduleAdd}
+          onRemove={scheduleRemove}
+          onClose={() => setShowSchedule(false)}
+        />
+      )}
+
+      {showSaved && (
+        <div className="modal-backdrop" onClick={() => setShowSaved(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="help-head"><h2>Saved orders</h2><button className="btn-secondary" onClick={() => setShowSaved(false)}>Close</button></div>
+            {savedOrders.length === 0 ? (
+              <div className="empty">No saved orders yet. Build an order list and tap <b>Save order</b>.</div>
+            ) : (
+              <div className="saved-list">
+                {savedOrders.map((o) => (
+                  <div className="saved-row" key={o.id}>
+                    <div className="saved-info">
+                      <div className="saved-title">{fmtDate(o.created_at)} · {o.item_count} item{o.item_count === 1 ? '' : 's'}</div>
+                      {o.placed_by && <div className="saved-sub">by {o.placed_by}</div>}
+                    </div>
+                    <button className="btn-secondary" onClick={() => printSaved(o)}>Print</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="print-area">
+        <h1>Deccan Dental — Order {printTarget?.type === 'saved' ? 'Sheet' : 'List'}</h1>
+        <div className="print-date">{printTarget?.type === 'saved' ? fmtDate(printTarget.order.created_at) : today}</div>
+        <table>
+          <thead>
+            <tr><th className="pc"> </th><th>Item</th><th>SKU</th><th>Supplier</th><th className="pq">Qty</th></tr>
+          </thead>
+          <tbody>
+            {(printTarget?.type === 'saved'
+              ? printTarget.order.lines.map((l, i) => ({ id: 'sv' + i, item_id: l.item_id, name: l.name, sku: l.sku, supplier: l.supplier, qty: l.qty, ordered: false }))
+              : orderRows.map((o) => ({ id: o.id, item_id: o.item_id, name: o.item ? o.item.name : o.item_id, sku: o.item?.sku || '', supplier: o.item?.supplier || '', qty: o.qty, ordered: o.ordered }))
+            ).map((r) => (
+              <tr key={r.id} className={r.ordered ? 'pdone' : ''}>
+                <td className="pc">{r.ordered ? '☑' : '☐'}</td>
+                <td>{r.name}</td>
+                <td>{r.sku}</td>
+                <td>{r.supplier}</td>
+                <td className="pq">{r.qty}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
