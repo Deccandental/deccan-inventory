@@ -152,7 +152,7 @@ function QRScanner({ mode, title, onResult, onAdd, onClose }) {
           ? <p className="error">Camera couldn&apos;t start on this device: {err}. Use the box below instead.</p>
           : <p className="hint">{mode === 'add'
               ? 'Scan each label to add it — keep going, then tap Done.'
-              : 'Point the camera at a label’s QR code — or type the ID below.'}</p>}
+              : 'Point the camera at a label\u2019s QR code — or type the ID below.'}</p>}
         <Field label="Or enter the Item ID" full>
           <input value={manual} placeholder="e.g. SUP-0007"
             onChange={(e) => setManual(e.target.value)}
@@ -185,6 +185,7 @@ export default function Home() {
   const [editing, setEditing] = useState(null);
   const [scanning, setScanning] = useState(null); // null | 'open' | 'add'
   const [uploading, setUploading] = useState(false);
+  const [setImgBusy, setSetImgBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sets, setSets] = useState([]);
   const [setRows, setSetRows] = useState([]);
@@ -423,6 +424,7 @@ export default function Home() {
     return m;
   }, [setups]);
 
+  function goToSet(st) { setSetupOpen(null); setView('sets'); setActiveSet(st.id); }
   function goToItem(item) { setSetupOpen(null); setView('items'); openEdit(item); }
   function openSetupAt(setupId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setupId, num }); }
 
@@ -711,6 +713,26 @@ export default function Home() {
     await supabase.from('sets').delete().eq('id', s.id);
     setActiveSet(null); fetchSets(); fetchSetRows();
   }
+  async function saveSetImage(st, url) {
+    const { error } = await supabase.from('sets').update({ image_url: url }).eq('id', st.id);
+    if (error) { alert('Could not save the set photo: ' + error.message + '\n(Has 04_set_photos.sql been run in Supabase?)'); return; }
+    setSets((l) => l.map((x) => (x.id === st.id ? { ...x, image_url: url } : x)));
+  }
+  async function onPickSetImage(e, st) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setSetImgBusy(true);
+    try {
+      const out = await compressImage(file, 1400, 0.82);
+      const ext = out.type === 'image/jpeg' ? 'jpg' : (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `sets/${st.id}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from('item-images').upload(path, out, { upsert: true, contentType: out.type || undefined });
+      if (error) throw new Error(error.message);
+      await saveSetImage(st, supabase.storage.from('item-images').getPublicUrl(path).data.publicUrl);
+    } catch (err) { alert('Photo upload failed: ' + (err?.message || err)); }
+    setSetImgBusy(false);
+  }
   async function addItemToSet(setId, item) {
     const { error } = await supabase.from('set_items').insert({ set_id: setId, item_id: item.item_id });
     if (error && error.code !== '23505') { alert(error.message); return; }
@@ -949,8 +971,8 @@ export default function Home() {
       )}
 
       {view === 'setups' && canSetups && (
-        <SetupsView setups={setups} items={items} itemByCode={itemByCode} isAdmin={isAdmin}
-          open={setupOpen} setOpen={setSetupOpen} onChanged={fetchSetups} onGoToItem={goToItem} />
+        <SetupsView setups={setups} items={items} itemByCode={itemByCode} sets={sets} setRows={setRows} isAdmin={isAdmin}
+          open={setupOpen} setOpen={setSetupOpen} onChanged={fetchSetups} onGoToItem={goToItem} onGoToSet={goToSet} />
       )}
 
       {view === 'sets' && !activeSet && (
@@ -966,6 +988,7 @@ export default function Home() {
             <div className="set-list">
               {sets.map((s) => (
                 <div className="set-row" key={s.id} onClick={() => setActiveSet(s.id)}>
+                  <div className="row-thumb sm">{s.image_url ? <img src={s.image_url} alt="" /> : <span className="ph">▢</span>}</div>
                   <div className="set-name">{s.name}</div>
                   <div className="set-count">{countInSet(s.id)} item{countInSet(s.id) === 1 ? '' : 's'} ›</div>
                 </div>
@@ -996,6 +1019,19 @@ export default function Home() {
               <div className="spacer" />
               <button className="btn-ghost" onClick={() => renameSetPrompt(s)}>Rename</button>
               <button className="btn-danger" onClick={() => deleteSetConfirm(s)}>Delete set</button>
+            </div>
+
+            <div className="set-photo-row">
+              {s.image_url
+                ? <img src={s.image_url} alt={s.name} className="set-photo" onClick={() => setZoomImg(s.image_url)} />
+                : <div className="noimg big set-nophoto">No photo</div>}
+              <div className="img-edit-actions">
+                <label className="btn-secondary file-btn">
+                  {setImgBusy ? 'Uploading…' : (s.image_url ? 'Change photo' : 'Add photo')}
+                  <input type="file" accept="image/*" hidden disabled={setImgBusy} onChange={(e) => onPickSetImage(e, s)} />
+                </label>
+                {s.image_url && <button type="button" className="btn-ghost" onClick={() => saveSetImage(s, null)}>Remove photo</button>}
+              </div>
             </div>
 
             <div className="controls">
@@ -1146,6 +1182,8 @@ export default function Home() {
               <h3>Set-ups (photos with numbered dots)</h3>
               <p>The <b>📸 Set-ups</b> tab holds photos of trays, operatories and cabinets with numbered dots on them. Tap a set-up to see its photo and index. Tick <b>Show numbers on photo</b> to show or hide the dots. Each numbered line can be linked to an inventory item: it shows the live count and LOW/OUT status, and <b>Open item ›</b> jumps to that item. Open any item to see which set-ups it appears in.</p>
               <p>Admins: <b>+ Add set-up</b>, then <b>Edit</b> — tap the photo to drop a dot, drag dots to move them, type what each is, <b>Link item</b> to tie it to inventory, and use ↑ ↓ to reorder (numbers follow).</p>
+
+              <p><b>Set photos:</b> open a set and tap <b>Add photo</b> to attach a picture of the kit. In a set-up, a numbered line can be linked to a <b>set</b> as well as an item — it then shows the set&apos;s photo, how many items it holds, and the live count of each (tap <b>Show items &amp; counts</b>).</p>
 
               <h3>Adding &amp; editing items</h3>
               <p><b>+ Add item</b> creates a new one. Category, Manufacturer, and Supplier are dropdowns — pick an existing value, or choose <b>➕ New…</b> to create one. <b>Add / change photo</b> uses the camera (photos are shrunk automatically, so they load fast and barely use storage).</p>

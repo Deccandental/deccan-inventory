@@ -439,3 +439,18 @@ input, select, textarea { font: inherit; }
 .setup-suggest-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: #fff; border: none; border-top: 1px solid #f0f0f0; border-radius: 0; padding: 9px 10px; font-size: 14px; color: var(--ink); }
 .setup-suggest-row:hover { background: #fff4ee; }
 .setup-suggest-qty { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* ---- set photos + set links in set-ups ---- */
+.set-row { gap: 12px; }
+.set-row .set-name { flex: 1; min-width: 0; }
+.set-row .row-thumb.sm { flex: 0 0 auto; }
+.set-photo-row { display: flex; align-items: center; gap: 14px; margin: 4px 0 12px; flex-wrap: wrap; }
+.set-photo { width: 140px; height: 140px; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); cursor: zoom-in; background: #eee; }
+.set-nophoto { width: 140px; height: 140px; display: grid; place-items: center; background: #eee; border-radius: 12px; color: var(--muted); font-size: 13px; }
+.setup-set-photo { display: block; max-width: 100%; max-height: 220px; margin-top: 6px; border-radius: 10px; border: 1px solid var(--line); object-fit: contain; background: #fafafa; }
+.setup-members { margin-top: 6px; font-size: 13px; }
+.setup-members summary { cursor: pointer; color: var(--orange-dk); font-weight: 600; padding: 4px 0; }
+.setup-member { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid #f0f0f0; }
+.setup-member-name { flex: 1; min-width: 0; color: var(--ink-dk); }
+.setup-member-qty { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.muted { color: var(--muted); }

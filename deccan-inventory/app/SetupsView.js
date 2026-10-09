@@ -68,6 +68,7 @@ function cleanPoints(points) {
     x: p.x == null ? null : r2(p.x),
     y: p.y == null ? null : r2(p.y),
     item_id: p.item_id || null,
+    set_id: p.set_id || null,
   }));
 }
 
@@ -133,7 +134,7 @@ function AddSetupModal({ groups, onClose, onCreated }) {
 }
 
 // ---------- Detail / edit modal ----------
-function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, autoEdit, onClose, onChanged, onGoToItem }) {
+function SetupDetail({ setup, items, itemByCode, sets, setRows, groups, isAdmin, initialNum, autoEdit, onClose, onChanged, onGoToItem, onGoToSet }) {
   const [draft, setDraft] = useState(null); // null = viewing
   const [sel, setSel] = useState(null);
   const [placingId, setPlacingId] = useState(null);
@@ -146,6 +147,10 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
   const photoRef = useRef(null);
   const dragRef = useRef(null);
   const lineRefs = useRef({});
+
+  const setById = (id) => (id ? sets.find((x) => x.id === id) : null);
+  const membersOf = (setId) => setRows.filter((r) => r.set_id === setId).map((r) => itemByCode(r.item_id)).filter(Boolean)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   const editing = !!draft;
   const data = draft || setup;
@@ -204,7 +209,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
       setPlacingId(null);
       return;
     }
-    const p = { id: uid(), label: '', x, y, item_id: null };
+    const p = { id: uid(), label: '', x, y, item_id: null, set_id: null };
     setPoints((ps) => [...ps, p]);
     setSel(p.id);
     setTimeout(() => lineRefs.current[p.id]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
@@ -250,12 +255,16 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
     if (placingId === id) setPlacingId(null);
   }
   function addLine() {
-    const p = { id: uid(), label: '', x: null, y: null, item_id: null };
+    const p = { id: uid(), label: '', x: null, y: null, item_id: null, set_id: null };
     setPoints((ps) => [...ps, p]);
     setSel(p.id);
   }
   function linkItem(pid, item) {
-    patchPoint(pid, { item_id: item.item_id, label: item.name }); // linked lines take the inventory item's name
+    patchPoint(pid, { item_id: item.item_id, set_id: null, label: item.name }); // linked lines take the inventory item's name
+    setLinkFor(null); setLinkQ(''); setTypeFor(null);
+  }
+  function linkSet(pid, st) {
+    patchPoint(pid, { set_id: st.id, item_id: null, label: st.name }); // ...or the set's name
     setLinkFor(null); setLinkQ(''); setTypeFor(null);
   }
 
@@ -292,7 +301,11 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
       title: draft.title.trim(),
       group_name: (draft.group_name || '').trim() || null,
       image_url: draft.image_url,
-      points: cleanPoints(draft.points.map((p) => { const it = p.item_id ? itemByCode(p.item_id) : null; return it ? { ...p, label: it.name } : p; })),
+      points: cleanPoints(draft.points.map((p) => {
+        const it = p.item_id ? itemByCode(p.item_id) : null;
+        const st = p.set_id ? setById(p.set_id) : null;
+        return it ? { ...p, label: it.name } : st ? { ...p, label: st.name } : p;
+      })),
       updated_at: new Date().toISOString(),
     }).eq('id', setup.id);
     setSaving(false);
@@ -316,6 +329,11 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
       (i.sku || '').toLowerCase().includes(q) ||
       (i.item_id || '').toLowerCase().includes(q))).slice(0, 8);
   }, [items, linkQ]);
+  const linkSetResults = useMemo(() => {
+    const q = linkQ.trim().toLowerCase();
+    if (!q) return [];
+    return sets.filter((x) => (x.name || '').toLowerCase().includes(q)).slice(0, 5);
+  }, [sets, linkQ]);
 
   const dotsVisible = editing || showNums;
 
@@ -351,7 +369,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
           <img src={data.image_url} alt={data.title} draggable={false} />
           {dotsVisible && points.map((p, i) => (p.x == null || p.y == null) ? null : (
             <div key={p.id}
-              className={'setup-dot' + (sel === p.id ? ' sel' : '') + (editing ? ' drag' : '') + (p.item_id ? ' linked' : '')}
+              className={'setup-dot' + (sel === p.id ? ' sel' : '') + (editing ? ' drag' : '') + ((p.item_id || p.set_id) ? ' linked' : '')}
               style={{ left: p.x + '%', top: p.y + '%' }}
               onPointerDown={(e) => dotDown(e, p)} onPointerMove={dotMove} onPointerUp={dotUp} onPointerCancel={dotUp}
               onClick={(e) => dotClick(e, p)}>{i + 1}</div>
@@ -384,7 +402,9 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
         <div className="setup-index">
           {points.map((p, i) => {
             const item = p.item_id ? itemByCode(p.item_id) : null;
+            const lset = p.set_id ? setById(p.set_id) : null;
             const missing = p.item_id && !item;
+            const missingSet = p.set_id && !lset;
             const unplaced = p.x == null || p.y == null;
             return (
               <div key={p.id} ref={(el) => { lineRefs.current[p.id] = el; }}
@@ -396,15 +416,26 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
                   <div className="setup-line-edit">
                     {item
                       ? <div className="setup-label-linked">{item.name} <span className="idpill">{item.item_id}</span></div>
-                      : <input className="setup-label-input" value={p.label} placeholder="What is it? (similar inventory items appear as you type)"
+                      : lset
+                      ? <div className="setup-label-linked">{lset.name} <span className="chip setchip">SET · {membersOf(lset.id).length} items</span></div>
+                      : <input className="setup-label-input" value={p.label} placeholder="What is it? (similar items and sets appear as you type)"
                           onFocus={() => setTypeFor(p.id)}
                           onBlur={() => setTimeout(() => setTypeFor((t) => (t === p.id ? null : t)), 200)}
                           onChange={(e) => { patchPoint(p.id, { label: e.target.value }); setTypeFor(p.id); }} />}
-                    {!item && typeFor === p.id && (() => {
+                    {!item && !lset && typeFor === p.id && (() => {
                       const sug = suggestItems(items, p.label);
-                      return sug.length > 0 ? (
+                      const ql = (p.label || '').trim().toLowerCase();
+                      const sugSets = ql.length >= 2 ? sets.filter((x) => (x.name || '').toLowerCase().includes(ql)).slice(0, 3) : [];
+                      return (sug.length > 0 || sugSets.length > 0) ? (
                         <div className="setup-suggest" onClick={(e) => e.stopPropagation()}>
-                          <div className="setup-suggest-h">Similar inventory items — tap to link</div>
+                          <div className="setup-suggest-h">Similar inventory items and sets — tap to link</div>
+                          {sugSets.map((st) => (
+                            <button type="button" key={'s' + st.id} className="setup-suggest-row"
+                              onMouseDown={(e) => e.preventDefault()} onClick={() => linkSet(p.id, st)}>
+                              <span className="chip setchip">SET</span> {st.name}
+                              <span className="setup-suggest-qty">{membersOf(st.id).length} items</span>
+                            </button>
+                          ))}
                           {sug.map((it) => (
                             <button type="button" key={it.id} className="setup-suggest-row"
                               onMouseDown={(e) => e.preventDefault()} onClick={() => linkItem(p.id, it)}>
@@ -422,17 +453,24 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
                       <button className="btn-secondary sm" disabled={i === 0} onClick={(e) => { e.stopPropagation(); move(i, -1); }} title="Move up">↑</button>
                       <button className="btn-secondary sm" disabled={i === points.length - 1} onClick={(e) => { e.stopPropagation(); move(i, 1); }} title="Move down">↓</button>
                       <button className="btn-secondary sm" onClick={(e) => { e.stopPropagation(); setLinkFor(linkFor === p.id ? null : p.id); setLinkQ(''); }}>
-                        {p.item_id ? 'Change item' : 'Link item'}
+                        {(p.item_id || p.set_id) ? 'Change link' : 'Link item / set'}
                       </button>
-                      {p.item_id && <button className="btn-ghost sm" onClick={(e) => { e.stopPropagation(); patchPoint(p.id, { item_id: null }); }}>Unlink</button>}
+                      {(p.item_id || p.set_id) && <button className="btn-ghost sm" onClick={(e) => { e.stopPropagation(); patchPoint(p.id, { item_id: null, set_id: null }); }}>Unlink</button>}
                       <button className="btn-ghost sm danger" onClick={(e) => { e.stopPropagation(); removeLine(p.id); }} title="Remove line">✕</button>
                     </div>
-                    {item && <div className="hint">Name comes from the inventory item — rename it there and it updates here. Unlink to type your own.</div>}
+                    {(item || lset) && <div className="hint">Name comes from the linked {item ? 'inventory item' : 'set'} — rename it there and it updates here. Unlink to type your own.</div>}
+                    {missingSet && <div className="setup-linked-note">→ linked set <span className="setup-missing">(set was deleted)</span></div>}
                     {missing && <div className="setup-linked-note">→ {p.item_id} <span className="setup-missing">(item not found)</span></div>}
                     {linkFor === p.id && (
                       <div className="setup-picker" onClick={(e) => e.stopPropagation()}>
-                        <input autoFocus placeholder="Search inventory by name, SKU or ID…" value={linkQ} onChange={(e) => setLinkQ(e.target.value)} />
-                        {linkQ.trim() && (linkResults.length === 0
+                        <input autoFocus placeholder="Search inventory items or sets…" value={linkQ} onChange={(e) => setLinkQ(e.target.value)} />
+                        {linkSetResults.map((st) => (
+                          <div className="add-row" key={'s' + st.id}>
+                            <div className="add-info"><span className="chip setchip">SET</span> {st.name} <span className="muted">· {membersOf(st.id).length} items</span></div>
+                            <button className="btn-primary sm" onClick={() => linkSet(p.id, st)}>Link</button>
+                          </div>
+                        ))}
+                        {linkQ.trim() && (linkResults.length === 0 && linkSetResults.length === 0
                           ? <div className="add-none">No matches.</div>
                           : linkResults.map((it) => (
                             <div className="add-row" key={it.id}>
@@ -445,7 +483,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
                   </div>
                 ) : (
                   <div className="setup-line-view">
-                    <div className="setup-line-label">{item?.name || p.label || <span className="muted">(no label)</span>}</div>
+                    <div className="setup-line-label">{item?.name || lset?.name || p.label || <span className="muted">(no label)</span>}</div>
                     {item && (
                       <div className="setup-item-card">
                         <div className="row-thumb sm">{item.image_url ? <img src={item.image_url} alt="" /> : <span className="ph">▢</span>}</div>
@@ -461,7 +499,42 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
                         <button className="btn-secondary sm" onClick={(e) => { e.stopPropagation(); onGoToItem(item); }}>Open item ›</button>
                       </div>
                     )}
+                    {lset && (() => {
+                      const mem = membersOf(lset.id);
+                      const low = mem.filter((it) => ['low', 'out'].includes(stockState(it))).length;
+                      return (
+                        <>
+                          <div className="setup-item-card">
+                            <div className="row-thumb sm">{lset.image_url ? <img src={lset.image_url} alt="" /> : <span className="ph">▢</span>}</div>
+                            <div className="setup-item-main">
+                              <div className="setup-item-name">{lset.name} <span className="chip setchip">SET</span></div>
+                              <div className="setup-item-stock">
+                                <b>{mem.length}</b> item{mem.length === 1 ? '' : 's'}
+                                {low > 0 && <span className="badge reorder">{low} low / out</span>}
+                              </div>
+                            </div>
+                            <button className="btn-secondary sm" onClick={(e) => { e.stopPropagation(); onGoToSet(lset); }}>Open set ›</button>
+                          </div>
+                          {lset.image_url && (
+                            <img src={lset.image_url} alt={lset.name} className="setup-set-photo" />
+                          )}
+                          {mem.length > 0 && (
+                            <details className="setup-members" onClick={(e) => e.stopPropagation()}>
+                              <summary>Show items &amp; counts</summary>
+                              {mem.map((it) => (
+                                <div className="setup-member" key={it.id}>
+                                  <div className="setup-member-name">{it.name} <span className="idpill">{it.item_id}</span></div>
+                                  <div className="setup-member-qty"><b>{it.current_qty ?? 0}</b> <StatusBadge item={it} /></div>
+                                  <button className="btn-secondary sm" onClick={() => onGoToItem(it)}>Open ›</button>
+                                </div>
+                              ))}
+                            </details>
+                          )}
+                        </>
+                      );
+                    })()}
                     {missing && <div className="setup-missing">Linked item {p.item_id} was deleted or renamed.</div>}
+                    {missingSet && <div className="setup-missing">The linked set was deleted.</div>}
                   </div>
                 )}
               </div>
@@ -490,7 +563,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
 }
 
 // ---------- Page ----------
-export default function SetupsView({ setups, items, itemByCode, isAdmin, open, setOpen, onChanged, onGoToItem }) {
+export default function SetupsView({ setups, items, itemByCode, sets, setRows, isAdmin, open, setOpen, onChanged, onGoToItem, onGoToSet }) {
   const [groupFilter, setGroupFilter] = useState('');
   const [adding, setAdding] = useState(false);
 
@@ -546,7 +619,7 @@ export default function SetupsView({ setups, items, itemByCode, isAdmin, open, s
             <div className="cat-header setup-grouphead">{g} <span className="cat-count">{list.length}</span></div>
             <div className="setup-grid">
               {list.map((s) => {
-                const linked = (s.points || []).filter((p) => p.item_id).length;
+                const linked = (s.points || []).filter((p) => p.item_id || p.set_id).length;
                 return (
                   <div className="setup-card" key={s.id} onClick={() => setOpen({ id: s.id, num: null })}>
                     <div className="setup-card-img"><img src={s.image_url} alt={s.title} loading="lazy" /></div>
@@ -570,9 +643,9 @@ export default function SetupsView({ setups, items, itemByCode, isAdmin, open, s
       )}
 
       {openSetup && (
-        <SetupDetail key={openSetup.id} setup={openSetup} items={items} itemByCode={itemByCode} groups={groups}
+        <SetupDetail key={openSetup.id} setup={openSetup} items={items} itemByCode={itemByCode} sets={sets} setRows={setRows} groups={groups}
           isAdmin={isAdmin} initialNum={open.num} autoEdit={!!open.edit}
-          onClose={() => setOpen(null)} onChanged={onChanged} onGoToItem={onGoToItem} />
+          onClose={() => setOpen(null)} onChanged={onChanged} onGoToItem={onGoToItem} onGoToSet={onGoToSet} />
       )}
     </>
   );
