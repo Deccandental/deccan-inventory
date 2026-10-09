@@ -264,17 +264,38 @@ export default function Home() {
   // an item or counting, so a refresh never overwrites something half-entered.
   const [refreshing, setRefreshing] = useState(false);
   const busyRef = useRef(false);
+  const retryRef = useRef(null);
+  const refreshAllRef = useRef(null);
   busyRef.current = !!(editing || counting || setupOpen || scanning || showSchedule || showSaved);
   const refreshAll = useCallback(async (manual) => {
     if (manual !== true) {
       const el = typeof document !== 'undefined' ? document.activeElement : null;
       const typing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
-      if (busyRef.current || typing) return;
+      if (busyRef.current || typing) {
+        // try again shortly instead of dropping the update
+        if (!retryRef.current) retryRef.current = setTimeout(() => { retryRef.current = null; refreshAllRef.current && refreshAllRef.current(); }, 2000);
+        return;
+      }
     }
     setRefreshing(true);
     await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
     setRefreshing(false);
   }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
+
+  refreshAllRef.current = refreshAll;
+
+  // Live updates from Supabase (needs 03_realtime.sql run once). Any change from any device
+  // triggers a quick refresh here; the focus/30s refresh above is the safety net if it's off.
+  useEffect(() => {
+    let timer = null;
+    const kick = () => { clearTimeout(timer); timer = setTimeout(() => refreshAllRef.current && refreshAllRef.current(), 600); };
+    const ch = supabase.channel('dd-live');
+    ['items', 'order_list', 'sets', 'set_items', 'inventory_sessions', 'orders', 'setups'].forEach((table) => {
+      ch.on('postgres_changes', { event: '*', schema: 'public', table }, kick);
+    });
+    ch.subscribe();
+    return () => { clearTimeout(timer); clearTimeout(retryRef.current); retryRef.current = null; supabase.removeChannel(ch); };
+  }, []);
 
   useEffect(() => {
     const onVisible = () => { if (document.visibilityState === 'visible') refreshAll(); };
