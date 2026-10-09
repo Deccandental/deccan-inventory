@@ -185,12 +185,10 @@ export default function Home() {
   const [editing, setEditing] = useState(null);
   const [scanning, setScanning] = useState(null); // null | 'open' | 'add'
   const [uploading, setUploading] = useState(false);
-  const [setImgBusy, setSetImgBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sets, setSets] = useState([]);
   const [setRows, setSetRows] = useState([]);
   const [activeSet, setActiveSet] = useState(null);
-  const [kitSearch, setKitSearch] = useState('');
   const [showHelp, setShowHelp] = useState(false);
   const [zoomImg, setZoomImg] = useState(null);
   const [counting, setCounting] = useState(null);
@@ -201,7 +199,6 @@ export default function Home() {
   const [showSaved, setShowSaved] = useState(false);
   const [printTarget, setPrintTarget] = useState(null);
   const [role, setRole] = useState('admin'); // 'admin' | 'viewer' | 'cpa' (real value comes from /api/me)
-  const [setups, setSetups] = useState([]);
   const [setupOpen, setSetupOpen] = useState(null); // { id, num, edit } | null
   const isAdmin = role === 'admin';
   const canSetups = role !== 'cpa';
@@ -249,12 +246,6 @@ export default function Home() {
     setSavedOrders(data || []);
   }, []);
 
-  const fetchSetups = useCallback(async () => {
-    const { data, error } = await supabase.from('setups').select('*').order('created_at', { ascending: false });
-    if (error) { console.error(error); return; } // table not created yet -> just show none
-    setSetups(data || []);
-  }, []);
-
   useEffect(() => {
     fetch('/api/me').then((r) => r.json()).then((d) => { if (d?.role && d.role !== 'none') setRole(d.role); }).catch(() => {});
   }, []);
@@ -279,9 +270,9 @@ export default function Home() {
       }
     }
     setRefreshing(true);
-    await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
+    await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
     setRefreshing(false);
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders]);
 
   refreshAllRef.current = refreshAll;
 
@@ -291,7 +282,7 @@ export default function Home() {
     let timer = null;
     const kick = () => { clearTimeout(timer); timer = setTimeout(() => refreshAllRef.current && refreshAllRef.current(), 600); };
     const ch = supabase.channel('dd-live');
-    ['items', 'order_list', 'sets', 'set_items', 'inventory_sessions', 'orders', 'setups'].forEach((table) => {
+    ['items', 'order_list', 'sets', 'set_items', 'inventory_sessions', 'orders'].forEach((table) => {
       ch.on('postgres_changes', { event: '*', schema: 'public', table }, kick);
     });
     ch.subscribe();
@@ -316,10 +307,10 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders(), fetchSetups()]);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
       setLoading(false);
     })();
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders, fetchSetups]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -415,18 +406,24 @@ export default function Home() {
     return 'SUP-' + String(max + 1).padStart(4, '0');
   }
 
-  // item_id -> [{ setup, num }] for the "Appears in set-ups" list on an item
+  // item_id -> [{ setup, num }] : the set-ups an item belongs to (num = its numbered line, or null if just listed)
   const itemSetups = useMemo(() => {
     const m = {};
-    setups.forEach((s) => (s.points || []).forEach((p, i) => {
-      if (p.item_id) (m[p.item_id] ||= []).push({ setup: s, num: i + 1 });
-    }));
+    const add = (id, setup, num) => {
+      const list = (m[id] ||= []);
+      const same = list.find((x) => x.setup.id === setup.id);
+      if (same) { if (num && !same.num) same.num = num; } else list.push({ setup, num });
+    };
+    sets.forEach((st) => {
+      (st.points || []).forEach((p, i) => { if (p.item_id) add(p.item_id, st, i + 1); });
+    });
+    setRows.forEach((r) => { const st = sets.find((x) => x.id === r.set_id); if (st) add(r.item_id, st, null); });
     return m;
-  }, [setups]);
+  }, [sets, setRows]);
 
-  function goToSet(st) { setSetupOpen(null); setView('sets'); setActiveSet(st.id); }
   function goToItem(item) { setSetupOpen(null); setView('items'); openEdit(item); }
-  function openSetupAt(setupId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setupId, num }); }
+  function openSetupAt(setId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setId, num }); }
+  function scanToSet(setId) { setActiveSet(setId); setScanning('set'); }
 
   // Ask the database (not this screen's possibly-stale copy) which Item IDs are taken
   async function freshIds() {
@@ -694,54 +691,6 @@ export default function Home() {
   }, [sets, setRows]);
   function countInSet(setId) { return setRows.filter((si) => si.set_id === setId).length; }
 
-  async function createSetPrompt() {
-    const name = prompt('Name this set (e.g. "Crown Bur Set")');
-    if (!name || !name.trim()) return;
-    const { data, error } = await supabase.from('sets').insert({ name: name.trim() }).select().single();
-    if (error) { alert(error.message); return; }
-    await fetchSets();
-    if (data) setActiveSet(data.id);
-  }
-  async function renameSetPrompt(s) {
-    const name = prompt('Rename set', s.name);
-    if (!name || !name.trim()) return;
-    await supabase.from('sets').update({ name: name.trim() }).eq('id', s.id);
-    fetchSets();
-  }
-  async function deleteSetConfirm(s) {
-    if (!confirm(`Delete the set "${s.name}"?\nThe items themselves are NOT deleted — only the grouping.`)) return;
-    await supabase.from('sets').delete().eq('id', s.id);
-    setActiveSet(null); fetchSets(); fetchSetRows();
-  }
-  async function saveSetImage(st, url) {
-    const { error } = await supabase.from('sets').update({ image_url: url }).eq('id', st.id);
-    if (error) { alert('Could not save the set photo: ' + error.message + '\n(Has 04_set_photos.sql been run in Supabase?)'); return; }
-    setSets((l) => l.map((x) => (x.id === st.id ? { ...x, image_url: url } : x)));
-  }
-  async function onPickSetImage(e, st) {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    setSetImgBusy(true);
-    try {
-      const out = await compressImage(file, 1400, 0.82);
-      const ext = out.type === 'image/jpeg' ? 'jpg' : (file.name.split('.').pop() || 'jpg').toLowerCase();
-      const path = `sets/${st.id}/${Date.now()}.${ext}`;
-      const { error } = await supabase.storage.from('item-images').upload(path, out, { upsert: true, contentType: out.type || undefined });
-      if (error) throw new Error(error.message);
-      await saveSetImage(st, supabase.storage.from('item-images').getPublicUrl(path).data.publicUrl);
-    } catch (err) { alert('Photo upload failed: ' + (err?.message || err)); }
-    setSetImgBusy(false);
-  }
-  async function addItemToSet(setId, item) {
-    const { error } = await supabase.from('set_items').insert({ set_id: setId, item_id: item.item_id });
-    if (error && error.code !== '23505') { alert(error.message); return; }
-    fetchSetRows();
-  }
-  async function removeItemFromSet(setId, itemId) {
-    setSetRows((l) => l.filter((si) => !(si.set_id === setId && si.item_id === itemId)));
-    await supabase.from('set_items').delete().eq('set_id', setId).eq('item_id', itemId);
-  }
   async function setAddByCode(code) {
     const item = itemByCode(code);
     if (!item) return 'No item: ' + code;
@@ -754,7 +703,7 @@ export default function Home() {
 
   function itemRow(item, opts = {}) {
     const st = stockState(item);
-    const otherSets = opts.setId ? (itemSetNames[item.item_id] || []).filter((nm) => nm !== opts.setName).length : 0;
+    const otherSets = (itemSetNames[item.item_id] || []).length;
     return (
       <div className={'item-row' + (st === 'out' ? ' out' : st === 'low' ? ' low' : '')} key={item.id} onClick={() => openEdit(item)}>
         <div className="row-thumb">
@@ -765,7 +714,7 @@ export default function Home() {
           <div className="row-sub">
             <span className="idpill">{item.item_id}</span>
             {item.category && <span className="chip" style={catStyle(item.category)}>{item.category}</span>}
-            {otherSets > 0 && <span className="chip setchip">in {otherSets} other set{otherSets === 1 ? '' : 's'}</span>}
+            {otherSets > 0 && <span className="chip setchip">in {otherSets} set-up{otherSets === 1 ? '' : 's'}</span>}
             {item.ordered_at && <span className="chip onorder">on order · {fmtDate(item.ordered_at)}</span>}
             {item.supplier && <span className="row-supplier">{item.supplier}</span>}
             {item.qty_updated_at && <span className="row-updated">counted {fmtDate(item.qty_updated_at)}</span>}
@@ -787,10 +736,6 @@ export default function Home() {
         <button className={onList(item.item_id) ? 'row-add on' : 'row-add'}
           title={onList(item.item_id) ? 'On order list — tap to remove' : 'Add to order list'}
           onClick={(e) => { e.stopPropagation(); toggleOrderForItem(item); }}>{onList(item.item_id) ? '✓' : '+'}</button>
-        {opts.setId && (
-          <button className="row-remove" title="Remove from this set"
-            onClick={(e) => { e.stopPropagation(); removeItemFromSet(opts.setId, item.item_id); }}>✕</button>
-        )}
       </div>
     );
   }
@@ -816,7 +761,7 @@ export default function Home() {
             </button>
           </div>
           <div className="top-actions">
-            <button className="btn-scan" onClick={() => setScanning(view === 'order' ? 'order' : (view === 'sets' && activeSet) ? 'set' : 'open')}>Scan</button>
+            <button className="btn-scan" onClick={() => setScanning(view === 'order' ? 'order' : 'open')}>Scan</button>
             <button className="btn-primary" onClick={openAdd}>+ Add</button>
             <button className="cart-btn" aria-label="Order list" onClick={() => { setView('order'); setActiveSet(null); }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M2 3h3l2.4 12h11l2-8H6" /></svg>
@@ -834,12 +779,9 @@ export default function Home() {
         <button className={view === 'order' ? 'navtab on' : 'navtab'} onClick={() => { setView('order'); setActiveSet(null); }}>
           Order list{orderCount ? ` (${orderCount})` : ''}
         </button>
-        <button className={view === 'sets' ? 'navtab on' : 'navtab'} onClick={() => { setView('sets'); setActiveSet(null); }}>
-          Sets{sets.length ? ` (${sets.length})` : ''}
-        </button>
         {canSetups && (
           <button className={view === 'setups' ? 'navtab on' : 'navtab'} onClick={() => { setView('setups'); setActiveSet(null); }}>
-            📸 Set-ups{setups.length ? ` (${setups.length})` : ''}
+            📸 Set-ups{sets.length ? ` (${sets.length})` : ''}
           </button>
         )}
         <div className="navbar-spacer" />
@@ -971,102 +913,11 @@ export default function Home() {
       )}
 
       {view === 'setups' && canSetups && (
-        <SetupsView setups={setups} items={items} itemByCode={itemByCode} sets={sets} setRows={setRows} isAdmin={isAdmin}
-          open={setupOpen} setOpen={setSetupOpen} onChanged={fetchSetups} onGoToItem={goToItem} onGoToSet={goToSet} />
+        <SetupsView sets={sets} setRows={setRows} items={items} itemByCode={itemByCode} isAdmin={isAdmin}
+          open={setupOpen} setOpen={setSetupOpen}
+          onChanged={() => Promise.all([fetchSets(), fetchSetRows()])}
+          onGoToItem={goToItem} onScanAdd={scanToSet} />
       )}
-
-      {view === 'sets' && !activeSet && (
-        <>
-          <div className="order-toolbar">
-            <div className="count">{sets.length} set{sets.length === 1 ? '' : 's'}</div>
-            <div className="spacer" />
-            <button className="btn-primary" onClick={createSetPrompt}>+ New set</button>
-          </div>
-          {sets.length === 0 ? (
-            <div className="empty">No sets yet. Create one (e.g. <b>Crown Bur Set</b>), then add items by search or scan.</div>
-          ) : (
-            <div className="set-list">
-              {sets.map((s) => (
-                <div className="set-row" key={s.id} onClick={() => setActiveSet(s.id)}>
-                  <div className="row-thumb sm">{s.image_url ? <img src={s.image_url} alt="" /> : <span className="ph">▢</span>}</div>
-                  <div className="set-name">{s.name}</div>
-                  <div className="set-count">{countInSet(s.id)} item{countInSet(s.id) === 1 ? '' : 's'} ›</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {view === 'sets' && activeSet && (() => {
-        const s = sets.find((x) => x.id === activeSet);
-        if (!s) return null;
-        const memberIds = setRows.filter((si) => si.set_id === activeSet).map((si) => si.item_id);
-        const members = memberIds.map((id) => itemByCode(id)).filter(Boolean)
-          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        const query = kitSearch.trim().toLowerCase();
-        const results = query
-          ? items.filter((i) => !i.archived && (
-              (i.name || '').toLowerCase().includes(query) ||
-              (i.sku || '').toLowerCase().includes(query) ||
-              (i.item_id || '').toLowerCase().includes(query))).slice(0, 12)
-          : [];
-        return (
-          <>
-            <div className="order-toolbar">
-              <button className="btn-secondary" onClick={() => { setActiveSet(null); setKitSearch(''); }}>← Sets</button>
-              <div className="set-title">{s.name}</div>
-              <div className="spacer" />
-              <button className="btn-ghost" onClick={() => renameSetPrompt(s)}>Rename</button>
-              <button className="btn-danger" onClick={() => deleteSetConfirm(s)}>Delete set</button>
-            </div>
-
-            <div className="set-photo-row">
-              {s.image_url
-                ? <img src={s.image_url} alt={s.name} className="set-photo" onClick={() => setZoomImg(s.image_url)} />
-                : <div className="noimg big set-nophoto">No photo</div>}
-              <div className="img-edit-actions">
-                <label className="btn-secondary file-btn">
-                  {setImgBusy ? 'Uploading…' : (s.image_url ? 'Change photo' : 'Add photo')}
-                  <input type="file" accept="image/*" hidden disabled={setImgBusy} onChange={(e) => onPickSetImage(e, s)} />
-                </label>
-                {s.image_url && <button type="button" className="btn-ghost" onClick={() => saveSetImage(s, null)}>Remove photo</button>}
-              </div>
-            </div>
-
-            <div className="controls">
-              <input className="search" placeholder="Search items to add…" value={kitSearch}
-                onChange={(e) => setKitSearch(e.target.value)} />
-              <button className="btn-scan" onClick={() => setScanning('set')}>Scan to add</button>
-            </div>
-
-            {query && (
-              <div className="add-results">
-                {results.length === 0 ? <div className="add-none">No matches.</div> : results.map((it) => {
-                  const inSet = memberIds.includes(it.item_id);
-                  return (
-                    <div className="add-row" key={it.id}>
-                      <div className="add-info"><span className="idpill">{it.item_id}</span> {it.name}</div>
-                      <button className={inSet ? 'row-add on' : 'row-add'}
-                        onClick={() => inSet ? removeItemFromSet(activeSet, it.item_id) : addItemToSet(activeSet, it)}>
-                        {inSet ? '✓' : '+'}</button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div className="count">{members.length} item{members.length === 1 ? '' : 's'} in this set</div>
-            {members.length === 0 ? (
-              <div className="empty">Empty set. Search above or tap <b>Scan to add</b> to put items in <b>{s.name}</b>.</div>
-            ) : (
-              <div className="item-list">
-                {members.map((item) => itemRow(item, { setId: activeSet, setName: s.name }))}
-              </div>
-            )}
-          </>
-        );
-      })()}
 
       {editing && (
         <div className="modal-backdrop" onClick={closeModal}>
@@ -1105,8 +956,8 @@ export default function Home() {
                   <span>Appears in set-ups</span>
                   <div className="setup-appears">
                     {itemSetups[editing.item_id].map(({ setup, num }) => (
-                      <button type="button" key={setup.id + num} className="btn-secondary sm" onClick={() => openSetupAt(setup.id, num)}>
-                        📸 {setup.title} · #{num}
+                      <button type="button" key={setup.id} className="btn-secondary sm" onClick={() => openSetupAt(setup.id, num)}>
+                        📸 {setup.name}{num ? ` · #${num}` : ''}
                       </button>
                     ))}
                   </div>
@@ -1174,16 +1025,11 @@ export default function Home() {
               <p>On the Order list: tick each checkbox as you place the order, adjust the <b>Qty</b>, remove with <b>✕</b>, and <b>Print</b> for a paper order sheet. <b>Clear checked</b> removes the ones you&apos;ve already ordered.</p>
 
               <h3>Scanning</h3>
-              <p><b>Scan QR</b> on the Items tab opens the scanned item. On the Order list or inside a Set, <b>Scan to add</b> drops scanned items straight in. The camera asks permission the first time — tap <b>Allow</b>. If it won&apos;t start, you can always type the Item ID in the box instead.</p>
+              <p><b>Scan QR</b> on the Items tab opens the scanned item. On the Order list or when editing a set-up, <b>Scan to add</b> drops scanned items straight in. The camera asks permission the first time — tap <b>Allow</b>. If it won&apos;t start, you can always type the Item ID in the box instead.</p>
 
-              <h3>Sets (kits)</h3>
-              <p>The <b>Sets</b> tab groups items into kits (e.g. &ldquo;Crown Bur Set&rdquo;). Open a set, then <b>search</b> or <b>Scan to add</b> to put items in, and <b>✕</b> to take them out. An item can live in several sets — its stock and details are shared, so a change anywhere updates it everywhere. A row shows <b>&ldquo;in N other sets&rdquo;</b> when it&apos;s shared.</p>
-
-              <h3>Set-ups (photos with numbered dots)</h3>
-              <p>The <b>📸 Set-ups</b> tab holds photos of trays, operatories and cabinets with numbered dots on them. Tap a set-up to see its photo and index. Tick <b>Show numbers on photo</b> to show or hide the dots. Each numbered line can be linked to an inventory item: it shows the live count and LOW/OUT status, and <b>Open item ›</b> jumps to that item. Open any item to see which set-ups it appears in.</p>
-              <p>Admins: <b>+ Add set-up</b>, then <b>Edit</b> — tap the photo to drop a dot, drag dots to move them, type what each is, <b>Link item</b> to tie it to inventory, and use ↑ ↓ to reorder (numbers follow).</p>
-
-              <p><b>Set photos:</b> open a set and tap <b>Add photo</b> to attach a picture of the kit. In a set-up, a numbered line can be linked to a <b>set</b> as well as an item — it then shows the set&apos;s photo, how many items it holds, and the live count of each (tap <b>Show items &amp; counts</b>).</p>
+              <h3>Set-ups (kits, trays and photos)</h3>
+              <p>The <b>📸 Set-ups</b> tab holds your kits and your photographed set-ups in one place. A set-up has a name, an optional group, a list of items, and — if you like — a photo with numbered dots. Tap one to see everything in it with live counts and LOW/OUT flags; tap <b>Open ›</b> on any item to jump to it. Open any item to see which set-ups it belongs to.</p>
+              <p>Admins: <b>+ Add set-up</b>, then <b>Edit</b>. Add items by search or <b>Scan to add</b>. To use a photo, tap it to drop a numbered dot, drag dots to move them, type what each is (similar items and set-ups appear as you type), and <b>Link item / set-up</b> to tie a number to an inventory item — or to another set-up, so one set-up can contain another. Use ↑ ↓ to reorder (numbers follow), and <b>Show numbers on photo</b> to hide or show the dots.</p>
 
               <h3>Adding &amp; editing items</h3>
               <p><b>+ Add item</b> creates a new one. Category, Manufacturer, and Supplier are dropdowns — pick an existing value, or choose <b>➕ New…</b> to create one. <b>Add / change photo</b> uses the camera (photos are shrunk automatically, so they load fast and barely use storage).</p>
@@ -1192,7 +1038,7 @@ export default function Home() {
               <h3>FAQs</h3>
               <div className="faq"><b>An item isn&apos;t flagged LOW even though it&apos;s low.</b><p>It needs a <b>Par level</b>. Open the item and set one — that&apos;s the number the on-hand count is compared against.</p></div>
               <div className="faq"><b>Archive vs Delete?</b><p>Archive hides the item but keeps its record; Delete removes it for good. Prefer Archive.</p></div>
-              <div className="faq"><b>Can one item be in two sets?</b><p>Yes. It&apos;s the same item, so its stock and details stay in sync across every set and the main list.</p></div>
+              <div className="faq"><b>Can one item be in two set-ups?</b><p>Yes. It&apos;s the same item, so its stock and details stay in sync across every set-up and the main list.</p></div>
               <div className="faq"><b>How do I add a brand-new category or supplier?</b><p>In the item, open the dropdown and choose <b>➕ New…</b>, then type it.</p></div>
               <div className="faq"><b>What do the QR labels do?</b><p>Each label is that item&apos;s ID. Scanning it opens the item — or adds it, on the Order list or in a Set.</p></div>
               <div className="faq"><b>The camera won&apos;t scan.</b><p>Make sure you allowed camera access and you&apos;re on the app&apos;s https link. The type-the-ID box always works as a backup.</p></div>

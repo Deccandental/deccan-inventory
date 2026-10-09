@@ -454,3 +454,9 @@ input, select, textarea { font: inherit; }
 .setup-member-name { flex: 1; min-width: 0; color: var(--ink-dk); }
 .setup-member-qty { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .muted { color: var(--muted); }
+
+/* ---- merged set-ups ---- */
+.setup-card-noimg { width: 100%; height: 100%; display: grid; place-items: center; font-size: 34px; color: #c6c6c6; }
+.setup-add-items { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.setup-add-items input { flex: 1 1 200px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
+.setup-members .setup-member:first-child { border-top: none; }
