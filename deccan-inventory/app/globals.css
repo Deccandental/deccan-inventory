@@ -430,3 +430,12 @@ input, select, textarea { font: inherit; }
 .setup-filebtn { align-self: flex-start; }
 .setup-add-preview { max-width: 100%; max-height: 240px; border-radius: 10px; border: 1px solid var(--line); margin-top: 8px; object-fit: contain; }
 .setup-appears { display: flex; gap: 6px; flex-wrap: wrap; }
+.setup-label-linked { font-weight: 600; color: var(--ink-dk); font-size: 15px; padding-top: 4px; }
+.setup-photo-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.setup-photo-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.setup-label-linked { padding: 8px; border: 1px solid #cfe8d6; background: #f1faf4; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--ink-dk); }
+.setup-suggest { margin-top: 6px; border: 1px solid var(--line); border-radius: 9px; background: #fff; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.setup-suggest-h { font-size: 11px; color: var(--muted); padding: 6px 10px 2px; }
+.setup-suggest-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: #fff; border: none; border-top: 1px solid #f0f0f0; border-radius: 0; padding: 9px 10px; font-size: 14px; color: var(--ink); }
+.setup-suggest-row:hover { background: #fff4ee; }
+.setup-suggest-qty { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }

@@ -10,13 +10,55 @@ const uid = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.r
 const clamp = (n) => Math.min(100, Math.max(0, n));
 const r2 = (n) => Math.round(n * 100) / 100;
 
-async function uploadSetupPhoto(file) {
-  const out = await compressImage(file, 1600, 0.82);
-  const ext = out.type === 'image/jpeg' ? 'jpg' : (file.name.split('.').pop() || 'jpg').toLowerCase();
+async function uploadBlob(out, nameHint) {
+  const ext = out.type === 'image/jpeg' ? 'jpg' : ((nameHint || 'x.jpg').split('.').pop() || 'jpg').toLowerCase();
   const path = `setups/${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
   const { error } = await supabase.storage.from('item-images').upload(path, out, { upsert: true, contentType: out.type || undefined });
   if (error) throw new Error(error.message);
   return supabase.storage.from('item-images').getPublicUrl(path).data.publicUrl;
+}
+
+async function uploadSetupPhoto(file) {
+  const out = await compressImage(file, 1600, 0.82);
+  return uploadBlob(out, file.name);
+}
+
+// Rotate the stored photo 90 degrees (dir = 1 clockwise, -1 counter-clockwise) and upload the result.
+async function rotatePhoto(url, dir) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Could not load the photo (' + res.status + ')');
+  const objUrl = URL.createObjectURL(await res.blob());
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('Could not read the photo')); i.src = objUrl; });
+    const c = document.createElement('canvas');
+    c.width = img.naturalHeight; c.height = img.naturalWidth;
+    const ctx = c.getContext('2d');
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate(dir * Math.PI / 2);
+    ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+    if (!blob) throw new Error('Could not rotate the photo');
+    return await uploadBlob(blob, 'rotated.jpg');
+  } finally { URL.revokeObjectURL(objUrl); }
+}
+
+// Suggest inventory items that resemble the text typed into a line label
+function suggestItems(items, text) {
+  const toks = (text || '').toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+  if (toks.length === 0) return [];
+  return items
+    .filter((i) => !i.archived)
+    .map((i) => {
+      const hay = `${i.name || ''} ${i.sku || ''} ${i.item_id || ''} ${i.manufacturer || ''} ${i.category || ''}`.toLowerCase();
+      const name = (i.name || '').toLowerCase();
+      let score = 0;
+      toks.forEach((t) => { if (hay.includes(t)) score += 1; if (name.startsWith(t)) score += 0.5; });
+      return { i, score };
+    })
+    .filter((x) => x.score >= Math.min(toks.length, 2))
+    .sort((a, b) => b.score - a.score || (a.i.name || '').localeCompare(b.i.name || ''))
+    .slice(0, 6)
+    .map((x) => x.i);
 }
 
 function cleanPoints(points) {
@@ -100,6 +142,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
   const [showNums, setShowNums] = useState(true);
   const [saving, setSaving] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [typeFor, setTypeFor] = useState(null); // line whose label box is showing suggestions
   const photoRef = useRef(null);
   const dragRef = useRef(null);
   const lineRefs = useRef({});
@@ -212,9 +255,8 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
     setSel(p.id);
   }
   function linkItem(pid, item) {
-    const p = points.find((x) => x.id === pid);
-    patchPoint(pid, { item_id: item.item_id, label: p && p.label.trim() ? p.label : item.name });
-    setLinkFor(null); setLinkQ('');
+    patchPoint(pid, { item_id: item.item_id, label: item.name }); // linked lines take the inventory item's name
+    setLinkFor(null); setLinkQ(''); setTypeFor(null);
   }
 
   async function changePhoto(e) {
@@ -228,6 +270,21 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
     setPhotoBusy(false);
   }
 
+  async function rotate(dir) {
+    if (!confirm('Rotate the photo ' + (dir > 0 ? 'right' : 'left') + '? Your dots turn with it.')) return;
+    setPhotoBusy(true);
+    try {
+      const url = await rotatePhoto(draft.image_url, dir);
+      setDraft((d) => ({
+        ...d,
+        image_url: url,
+        points: d.points.map((p) => (p.x == null || p.y == null ? p
+          : dir > 0 ? { ...p, x: 100 - p.y, y: p.x } : { ...p, x: p.y, y: 100 - p.x })),
+      }));
+    } catch (err) { alert('Rotate failed: ' + (err?.message || err)); }
+    setPhotoBusy(false);
+  }
+
   async function save() {
     if (!draft.title.trim()) { alert('Give the set-up a title.'); return; }
     setSaving(true);
@@ -235,7 +292,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
       title: draft.title.trim(),
       group_name: (draft.group_name || '').trim() || null,
       image_url: draft.image_url,
-      points: cleanPoints(draft.points),
+      points: cleanPoints(draft.points.map((p) => { const it = p.item_id ? itemByCode(p.item_id) : null; return it ? { ...p, label: it.name } : p; })),
       updated_at: new Date().toISOString(),
     }).eq('id', setup.id);
     setSaving(false);
@@ -309,9 +366,11 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
         {editing && (
           <div className="setup-photo-actions">
             <label className="btn-secondary file-btn">
-              {photoBusy ? 'Uploading…' : 'Change photo'}
-              <input type="file" accept="image/*" hidden onChange={changePhoto} />
+              {photoBusy ? 'Working…' : 'Change photo'}
+              <input type="file" accept="image/*" hidden onChange={changePhoto} disabled={photoBusy} />
             </label>
+            <button className="btn-secondary" disabled={photoBusy} onClick={() => rotate(-1)}>⟲ Rotate left</button>
+            <button className="btn-secondary" disabled={photoBusy} onClick={() => rotate(1)}>⟳ Rotate right</button>
           </div>
         )}
 
@@ -335,8 +394,27 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
 
                 {editing ? (
                   <div className="setup-line-edit">
-                    <input className="setup-label-input" value={p.label} placeholder="What is it?"
-                      onChange={(e) => patchPoint(p.id, { label: e.target.value })} />
+                    {item
+                      ? <div className="setup-label-linked">{item.name} <span className="idpill">{item.item_id}</span></div>
+                      : <input className="setup-label-input" value={p.label} placeholder="What is it? (similar inventory items appear as you type)"
+                          onFocus={() => setTypeFor(p.id)}
+                          onBlur={() => setTimeout(() => setTypeFor((t) => (t === p.id ? null : t)), 200)}
+                          onChange={(e) => { patchPoint(p.id, { label: e.target.value }); setTypeFor(p.id); }} />}
+                    {!item && typeFor === p.id && (() => {
+                      const sug = suggestItems(items, p.label);
+                      return sug.length > 0 ? (
+                        <div className="setup-suggest" onClick={(e) => e.stopPropagation()}>
+                          <div className="setup-suggest-h">Similar inventory items — tap to link</div>
+                          {sug.map((it) => (
+                            <button type="button" key={it.id} className="setup-suggest-row"
+                              onMouseDown={(e) => e.preventDefault()} onClick={() => linkItem(p.id, it)}>
+                              <span className="idpill">{it.item_id}</span> {it.name}
+                              <span className="setup-suggest-qty">{it.current_qty ?? 0} in stock</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null;
+                    })()}
                     <div className="setup-line-tools">
                       <button className="btn-secondary sm" onClick={(e) => { e.stopPropagation(); setPlacingId(p.id); setSel(p.id); }}>
                         {unplaced ? 'Place' : 'Move'}
@@ -349,11 +427,8 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
                       {p.item_id && <button className="btn-ghost sm" onClick={(e) => { e.stopPropagation(); patchPoint(p.id, { item_id: null }); }}>Unlink</button>}
                       <button className="btn-ghost sm danger" onClick={(e) => { e.stopPropagation(); removeLine(p.id); }} title="Remove line">✕</button>
                     </div>
-                    {p.item_id && (
-                      <div className="setup-linked-note">
-                        {item ? <>→ <b>{item.name}</b> <span className="idpill">{item.item_id}</span></> : <>→ {p.item_id} <span className="setup-missing">(item not found)</span></>}
-                      </div>
-                    )}
+                    {item && <div className="hint">Name comes from the inventory item — rename it there and it updates here. Unlink to type your own.</div>}
+                    {missing && <div className="setup-linked-note">→ {p.item_id} <span className="setup-missing">(item not found)</span></div>}
                     {linkFor === p.id && (
                       <div className="setup-picker" onClick={(e) => e.stopPropagation()}>
                         <input autoFocus placeholder="Search inventory by name, SKU or ID…" value={linkQ} onChange={(e) => setLinkQ(e.target.value)} />
@@ -370,7 +445,7 @@ function SetupDetail({ setup, items, itemByCode, groups, isAdmin, initialNum, au
                   </div>
                 ) : (
                   <div className="setup-line-view">
-                    <div className="setup-line-label">{p.label || item?.name || <span className="muted">(no label)</span>}</div>
+                    <div className="setup-line-label">{item?.name || p.label || <span className="muted">(no label)</span>}</div>
                     {item && (
                       <div className="setup-item-card">
                         <div className="row-thumb sm">{item.image_url ? <img src={item.image_url} alt="" /> : <span className="ph">▢</span>}</div>
