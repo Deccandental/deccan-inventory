@@ -426,7 +426,25 @@ export default function Home() {
   function goToItem(item) { setSetupOpen(null); setView('items'); openEdit(item); }
   function openSetupAt(setupId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setupId, num }); }
 
-  function openAdd() { setEditing({ ...EMPTY, item_id: nextItemId() }); }
+  // Ask the database (not this screen's possibly-stale copy) which Item IDs are taken
+  async function freshIds() {
+    const { data } = await supabase.from('items').select('item_id');
+    return new Set((data || []).map((r) => r.item_id));
+  }
+  function nextFreeId(ids) {
+    let max = 0;
+    ids.forEach((id) => { const m = /^SUP-(\d+)$/.exec(id || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+    return 'SUP-' + String(max + 1).padStart(4, '0');
+  }
+  async function openAdd() {
+    const guess = nextItemId();
+    setEditing({ ...EMPTY, item_id: guess });
+    try {
+      const fresh = nextFreeId(await freshIds());
+      // swap in the up-to-date ID only if the form is still the untouched new item
+      setEditing((e) => (e && !e.id && e.item_id === guess ? { ...e, item_id: fresh } : e));
+    } catch (_) {}
+  }
   function openEdit(item) {
     setEditing({ ...EMPTY, ...item, expiration_date: item.expiration_date || '', last_ordered: item.last_ordered || '' });
   }
@@ -618,8 +636,19 @@ export default function Home() {
   async function saveItem() {
     if (!editing.item_id.trim() || !editing.name.trim()) { alert('Item ID and Name are required.'); return; }
     setSaving(true);
+    let useId = editing.item_id.trim();
+    let renumbered = false;
+    if (!editing.id) {
+      try {
+        const ids = await freshIds();
+        if (ids.has(useId)) {
+          if (/^SUP-\d+$/.test(useId)) { useId = nextFreeId(ids); renumbered = true; }
+          else { setSaving(false); alert(`Item ID "${useId}" is already used by another item. Please change it.`); return; }
+        }
+      } catch (_) {}
+    }
     const payload = {
-      item_id: editing.item_id.trim(), name: editing.name.trim(),
+      item_id: useId, name: editing.name.trim(),
       category: txt(editing.category), sku: txt(editing.sku),
       manufacturer: txt(editing.manufacturer), supplier: txt(editing.supplier),
       storage_location: txt(editing.storage_location),
@@ -632,9 +661,14 @@ export default function Home() {
     if (editing.id) ({ error } = await supabase.from('items').update(payload).eq('id', editing.id));
     else ({ error } = await supabase.from('items').insert(payload));
     setSaving(false);
-    if (error) { alert('Save failed: ' + error.message); return; }
+    if (error) {
+      if (error.code === '23505') alert('That Item ID is already used by another item. Please change the Item ID and save again.');
+      else alert('Save failed: ' + error.message);
+      return;
+    }
     closeModal();
     fetchItems();
+    if (renumbered) alert(`That ID had just been taken, so this item was saved as ${useId}.`);
   }
 
   async function archiveItem(item, archived) {
