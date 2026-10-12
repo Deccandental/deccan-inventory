@@ -460,3 +460,4 @@ input, select, textarea { font: inherit; }
 .setup-add-items { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .setup-add-items input { flex: 1 1 200px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
 .setup-members .setup-member:first-child { border-top: none; }
+.setup-assign { padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; background: #fff; color: var(--ink); max-width: 150px; }
