@@ -372,6 +372,21 @@ function SetupDetail({ setup, items, itemByCode, sets, setRows, groups, isAdmin,
 
   const dotsVisible = editing || showNums;
 
+  // Give a listed item a number: put it on an existing free line, or start a new numbered line for it
+  function assignToNumber(it, target) {
+    if (!target) return;
+    if (target === '__new__') {
+      const np = { id: uid(), label: it.name, x: null, y: null, item_id: it.item_id, set_id: null };
+      setPoints((ps) => [...ps, np]);
+      setSel(np.id);
+      setTimeout(() => lineRefs.current[np.id]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 80);
+      return;
+    }
+    patchPoint(target, { item_id: it.item_id, set_id: null, label: it.name });
+    setSel(target);
+    setTimeout(() => lineRefs.current[target]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 80);
+  }
+
   function itemMini(it, extra) {
     return (
       <div className="setup-member" key={it.id}>
@@ -627,7 +642,19 @@ function SetupDetail({ setup, items, itemByCode, sets, setRows, groups, isAdmin,
             ) : (
               <div className="setup-members">
                 {otherItems.map((it) => itemMini(it, editing
-                  ? <button className="btn-ghost sm danger" title="Remove from this set-up" onClick={() => removeMember(it)}>✕</button>
+                  ? (
+                    <>
+                      <select className="setup-assign" value="" title="Give this item a number on the photo"
+                        onChange={(e) => assignToNumber(it, e.target.value)}>
+                        <option value="">Assign to #…</option>
+                        {points.map((p, i) => (p.item_id || p.set_id) ? null : (
+                          <option key={p.id} value={p.id}>#{i + 1}{p.label ? ' — ' + p.label : ' (empty line)'}</option>
+                        ))}
+                        <option value="__new__">＋ New numbered line</option>
+                      </select>
+                      <button className="btn-ghost sm danger" title="Remove from this set-up" onClick={() => removeMember(it)}>✕</button>
+                    </>
+                  )
                   : null))}
               </div>
             )}
