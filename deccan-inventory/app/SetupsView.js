@@ -390,6 +390,7 @@ function SetupDetail({ setup, items, itemByCode, sets, setRows, groups, isAdmin,
   function itemMini(it, extra) {
     return (
       <div className="setup-member" key={it.id}>
+        <div className="row-thumb sm">{it.image_url ? <img src={it.image_url} alt="" /> : <span className="ph">▢</span>}</div>
         <div className="setup-member-name">{it.name} <span className="idpill">{it.item_id}</span></div>
         <div className="setup-member-qty"><b>{it.current_qty ?? 0}</b> <StatusBadge item={it} />{it.ordered_at && <span className="chip onorder">on order</span>}</div>
         <button className="btn-secondary sm" onClick={() => onGoToItem(it)}>Open ›</button>
