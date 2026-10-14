@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { Field, PickOrNew, StatusBadge, stockState, fmtDate } from './ui';
 import { compressImage } from '../lib/image';
 import SetupsView from './SetupsView';
+import ProtocolsView from './ProtocolsView';
 
 const EMPTY = {
   item_id: '', name: '', category: '', sku: '', manufacturer: '', supplier: '',
@@ -200,6 +201,8 @@ export default function Home() {
   const [printTarget, setPrintTarget] = useState(null);
   const [role, setRole] = useState('admin'); // 'admin' | 'viewer' | 'cpa' (real value comes from /api/me)
   const [setupOpen, setSetupOpen] = useState(null); // { id, num, edit } | null
+  const [protocols, setProtocols] = useState([]);
+  const [protoOpen, setProtoOpen] = useState(null); // { id, edit } | null
   const isAdmin = role === 'admin';
   const canSetups = role !== 'cpa';
 
@@ -227,6 +230,11 @@ export default function Home() {
   const fetchSetRows = useCallback(async () => {
     const { data } = await supabase.from('set_items').select('*');
     setSetRows(data || []);
+  }, []);
+
+  const fetchProtocols = useCallback(async () => {
+    const { data } = await supabase.from('protocols').select('*').order('title');
+    setProtocols(data || []);
   }, []);
 
   const fetchLastCount = useCallback(async () => {
@@ -258,7 +266,7 @@ export default function Home() {
   const busyRef = useRef(false);
   const retryRef = useRef(null);
   const refreshAllRef = useRef(null);
-  busyRef.current = !!(editing || counting || setupOpen || scanning || showSchedule || showSaved);
+  busyRef.current = !!(editing || counting || setupOpen || protoOpen || scanning || showSchedule || showSaved);
   const refreshAll = useCallback(async (manual) => {
     if (manual !== true) {
       const el = typeof document !== 'undefined' ? document.activeElement : null;
@@ -270,9 +278,9 @@ export default function Home() {
       }
     }
     setRefreshing(true);
-    await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
+    await Promise.all([fetchItems(true), fetchOrderList(), fetchSets(), fetchSetRows(), fetchProtocols(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
     setRefreshing(false);
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchProtocols, fetchLastCount, fetchSchedules, fetchSavedOrders]);
 
   refreshAllRef.current = refreshAll;
 
@@ -282,7 +290,7 @@ export default function Home() {
     let timer = null;
     const kick = () => { clearTimeout(timer); timer = setTimeout(() => refreshAllRef.current && refreshAllRef.current(), 600); };
     const ch = supabase.channel('dd-live');
-    ['items', 'order_list', 'sets', 'set_items', 'inventory_sessions', 'orders'].forEach((table) => {
+    ['items', 'order_list', 'sets', 'set_items', 'protocols', 'inventory_sessions', 'orders'].forEach((table) => {
       ch.on('postgres_changes', { event: '*', schema: 'public', table }, kick);
     });
     ch.subscribe();
@@ -307,10 +315,10 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
+      await Promise.all([fetchItems(), fetchOrderList(), fetchSets(), fetchSetRows(), fetchProtocols(), fetchLastCount(), fetchSchedules(), fetchSavedOrders()]);
       setLoading(false);
     })();
-  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchLastCount, fetchSchedules, fetchSavedOrders]);
+  }, [fetchItems, fetchOrderList, fetchSets, fetchSetRows, fetchProtocols, fetchLastCount, fetchSchedules, fetchSavedOrders]);
 
   const itemByCode = useCallback(
     (code) => items.find((i) => (i.item_id || '').toLowerCase() === (code || '').toLowerCase()),
@@ -406,6 +414,15 @@ export default function Home() {
     return 'SUP-' + String(max + 1).padStart(4, '0');
   }
 
+  // item_id -> [protocol] : the protocols that use an item
+  const itemProtocols = useMemo(() => {
+    const m = {};
+    protocols.forEach((p) => {
+      (Array.isArray(p.item_ids) ? p.item_ids : []).forEach((id) => { (m[id] ||= []).push(p); });
+    });
+    return m;
+  }, [protocols]);
+
   // item_id -> [{ setup, num }] : the set-ups an item belongs to (num = its numbered line, or null if just listed)
   const itemSetups = useMemo(() => {
     const m = {};
@@ -421,8 +438,9 @@ export default function Home() {
     return m;
   }, [sets, setRows]);
 
-  function goToItem(item) { setSetupOpen(null); setView('items'); openEdit(item); }
+  function goToItem(item) { setSetupOpen(null); setProtoOpen(null); setView('items'); openEdit(item); }
   function openSetupAt(setId, num) { closeModal(); setView('setups'); setActiveSet(null); setSetupOpen({ id: setId, num }); }
+  function openProtocolAt(protoId) { closeModal(); setView('protocols'); setProtoOpen({ id: protoId }); }
   function scanToSet(setId) { setActiveSet(setId); setScanning('set'); }
 
   // Ask the database (not this screen's possibly-stale copy) which Item IDs are taken
@@ -784,6 +802,11 @@ export default function Home() {
             📸 Set-ups{sets.length ? ` (${sets.length})` : ''}
           </button>
         )}
+        {canSetups && (
+          <button className={view === 'protocols' ? 'navtab on' : 'navtab'} onClick={() => { setView('protocols'); setActiveSet(null); }}>
+            📋 Protocols{protocols.length ? ` (${protocols.length})` : ''}
+          </button>
+        )}
         <div className="navbar-spacer" />
         {lowCount > 0 && (
           <button className={fLow ? 'navlow on' : 'navlow'} onClick={() => { setView('items'); setFLow((v) => !v); }}>
@@ -919,6 +942,13 @@ export default function Home() {
           onGoToItem={goToItem} onScanAdd={scanToSet} />
       )}
 
+      {view === 'protocols' && canSetups && (
+        <ProtocolsView protocols={protocols} items={items} itemByCode={itemByCode} isAdmin={isAdmin}
+          open={protoOpen} setOpen={setProtoOpen}
+          onChanged={fetchProtocols}
+          onGoToItem={goToItem} />
+      )}
+
       {editing && (
         <div className="modal-backdrop" onClick={closeModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -958,6 +988,19 @@ export default function Home() {
                     {itemSetups[editing.item_id].map(({ setup, num }) => (
                       <button type="button" key={setup.id} className="btn-secondary sm" onClick={() => openSetupAt(setup.id, num)}>
                         📸 {setup.name}{num ? ` · #${num}` : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {editing.id && canSetups && (itemProtocols[editing.item_id] || []).length > 0 && (
+                <div className="field full">
+                  <span>Used in protocols</span>
+                  <div className="setup-appears">
+                    {itemProtocols[editing.item_id].map((p) => (
+                      <button type="button" key={p.id} className="btn-secondary sm" onClick={() => openProtocolAt(p.id)}>
+                        📋 {p.title}
                       </button>
                     ))}
                   </div>
@@ -1030,6 +1073,10 @@ export default function Home() {
               <h3>Set-ups (kits, trays and photos)</h3>
               <p>The <b>📸 Set-ups</b> tab holds your kits and your photographed set-ups in one place. A set-up has a name, an optional group, a list of items, and — if you like — a photo with numbered dots. Tap one to see everything in it with live counts and LOW/OUT flags; tap <b>Open ›</b> on any item to jump to it. Open any item to see which set-ups it belongs to.</p>
               <p>Admins: <b>+ Add set-up</b>, then <b>Edit</b>. Add items by search or <b>Scan to add</b>. To use a photo, tap it to drop a numbered dot, drag dots to move them, type what each is (similar items and set-ups appear as you type), and <b>Link item / set-up</b> to tie a number to an inventory item — or to another set-up, so one set-up can contain another. Use ↑ ↓ to reorder (numbers follow), and <b>Show numbers on photo</b> to hide or show the dots.</p>
+
+              <h3>Protocols (the materials manual)</h3>
+              <p>The <b>📋 Protocols</b> tab is the step-by-step manual for mixing and applying materials — cements, bonding agents, etch, impression materials, whitening and more. Search or tap a category pill, then tap a protocol to see its numbered steps, warnings, links to the manufacturer&apos;s instructions, and the exact products it uses with live stock counts. Open any item to see which protocols use it.</p>
+              <p>Admins: tap <b>Edit</b> on a protocol to change steps (↑ ↓ to reorder), warnings, notes and links, or to link/unlink inventory items — or <b>+ Add protocol</b> to write a new one.</p>
 
               <h3>Adding &amp; editing items</h3>
               <p><b>+ Add item</b> creates a new one. Category, Manufacturer, and Supplier are dropdowns — pick an existing value, or choose <b>➕ New…</b> to create one. <b>Add / change photo</b> uses the camera (photos are shrunk automatically, so they load fast and barely use storage).</p>
